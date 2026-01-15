@@ -6,7 +6,7 @@ if (!TOKEN) {
 }
 
 const API = `https://api.telegram.org/bot${TOKEN}`;
-let INBOX_CHAT_ID = null;
+let INBOX_CHAT_ID = 100123456789;
 
 console.log("✅ Clean Support Bot Running...");
 console.log("ℹ️  Waiting for /setgroup command in your Telegram Group...");
@@ -118,5 +118,6 @@ async function poll() {
     }
   }
 }
+
 
 poll();
