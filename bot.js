@@ -96,7 +96,23 @@ async function poll() {
                 });
                 continue;
             }
-            // Broadcast logic here (skipped for brevity)
+            
+            // Broadcast Command
+            if (text.startsWith("/broadcast")) {
+                const noticeText = text.replace("/broadcast", "").trim();
+                if (!noticeText) continue;
+                await api("sendMessage", { chat_id: chatId, text: `📢 Sending notice to ${userList.size} users...` });
+                for (const userId of userList) {
+                    await api("sendMessage", {
+                        chat_id: userId,
+                        text: `📢 <b>OFFICIAL NOTICE</b>\n━━━━━━━━━━━━━━━━\n\n${noticeText}\n\n━━━━━━━━━━━━━━━━\n<i>Authorized by Super Club Admin</i>`,
+                        parse_mode: "HTML"
+                    });
+                    await sleep(50);
+                }
+                await api("sendMessage", { chat_id: chatId, text: "✅ Broadcast Complete." });
+                continue;
+            }
         }
 
         // =============================================
@@ -111,7 +127,8 @@ async function poll() {
 ━━━━━━━━━━━━━━━━━━━━━━
 প্রিয় ${name},
 আমাদের প্রিমিয়াম সাপোর্টে আপনাকে স্বাগতম।
-আপনার সমস্যা বা স্ক্রিনশট নিচে পাঠান। ❤️
+
+নিচের মেনু থেকে আপনার সমস্যার বিষয়টি সিলেক্ট করুন। আমাদের দক্ষ এজেন্টরা ২৪/৭ আপনার সেবায় নিয়োজিত। ❤️
 
 <i>Choose an option below:</i>
             `;
@@ -129,28 +146,48 @@ async function poll() {
             continue;
           }
 
-          // --- AUTO REPLY LOGIC ---
+          // --- YOUR CUSTOM AUTO REPLY LOGIC ---
           let isButton = false;
+          
+          // 1. DEPOSIT
           if (text === CMD_DEPOSIT) {
               isButton = true;
-              await api("sendMessage", { chat_id: chatId, text: "💳 <b>ডিপোজিট সমস্যা?</b>\n\nআপনার TrxID এবং পেমেন্টের স্ক্রিনশট দিন।", parse_mode: "HTML" });
+              await api("sendMessage", {
+                  chat_id: chatId,
+                  text: "💳 <b>ডিপোজিট সমস্যা?</b>\n\nঅনুগ্রহ করে নিচে তথ্যগুলো দিন:\n1. আপনার গেম আইডি\n2. ট্রানজেকশন আইডি (TrxID)\n3. পেমেন্টের স্ক্রিনশট",
+                  parse_mode: "HTML"
+              });
           } 
+          // 2. WITHDRAW
           else if (text === CMD_WITHDRAW) {
               isButton = true;
-              await api("sendMessage", { chat_id: chatId, text: "💰 <b>উইথড্র সমস্যা?</b>\n\nআপনার গেম আইডি এবং কত টাকা উইথড্র দিয়েছেন তা লিখুন।", parse_mode: "HTML" });
+              await api("sendMessage", {
+                  chat_id: chatId,
+                  text: "💰 <b>উইথড্র সমস্যা?</b>\n\nঅনুগ্রহ করে নিচে তথ্যগুলো দিন:\n1. আপনার গেম আইডি\n2. কত টাকা উইথড্র দিয়েছেন?\n3. কোন মেথডে (Bkash/Nagad) দিয়েছেন",
+                  parse_mode: "HTML"
+              });
           }
+          // 3. GAME ID
           else if (text === CMD_GAMEID) {
               isButton = true;
-              await api("sendMessage", { chat_id: chatId, text: "👣 <b>গেম আইডি সমস্যা?</b>\n\nসঠিক গেম আইডি এবং সমস্যার ছবি দিন।", parse_mode: "HTML" });
+              await api("sendMessage", {
+                  chat_id: chatId,
+                  text: "👣 <b>গেম আইডি সমস্যা?</b>\n\nআপনার সঠিক গেম আইডিটি লিখে পাঠান এবং সমস্যার স্ক্রিনশট দিন।",
+                  parse_mode: "HTML"
+              });
           }
+          // 4. OTHERS
           else if (text === CMD_OTHERS) {
               isButton = true;
-              await api("sendMessage", { chat_id: chatId, text: "ℹ️ <b>অন্যান্য সাহায্য?</b>\n\nআপনার সমস্যা বিস্তারিত লিখুন।", parse_mode: "HTML" });
+              await api("sendMessage", {
+                  chat_id: chatId,
+                  text: "ℹ️ <b>অন্যান্য সাহায্য</b>\n\nআপনার সমস্যাটি বিস্তারিত লিখে জানান। আমাদের এজেন্ট শীঘ্রই রিপ্লাই দিবে।",
+                  parse_mode: "HTML"
+              });
           }
 
           // --- FORWARD TO ADMIN (Text, Photo, Voice - ALL) ---
           
-          // ১. প্রথমে একটি টিকেট হেডলাইন পাঠাবে (যাতে আপনি রিপ্লাই দিতে পারেন)
           const ticketHeader = `
 💎 <b>NEW TICKET</b> | #UID${msg.from.id}
 ━━━━━━━━━━━━━━━━
@@ -160,14 +197,13 @@ ${isButton ? `🔘 <b>Selected:</b> ${text}` : ""}
 ━━━━━━━━━━━━━━━━
 <i>(Reply to this message to answer)</i>`;
 
-          // শুধু বাটন চাপলে হেডার যাবে
           if (isButton) {
              await api("sendMessage", { chat_id: activeGroupId, text: ticketHeader, parse_mode: "HTML" });
           } else {
-             // টেক্সট বা ছবি হলে: আগে হেডার যাবে, তারপর কন্টেন্ট কপি হবে
+             // হেডার পাঠানো
              await api("sendMessage", { chat_id: activeGroupId, text: ticketHeader, parse_mode: "HTML" });
              
-             // ✅ FIX: copyMessage ব্যবহার করায় ছবি/ভিডিও সব যাবে
+             // আসল মেসেজ (ছবি/টেক্সট) কপি করা
              await api("copyMessage", {
                  chat_id: activeGroupId,
                  from_chat_id: chatId,
@@ -194,7 +230,6 @@ ${isButton ? `🔘 <b>Selected:</b> ${text}` : ""}
         // 👨‍💻 ADMIN REPLY SYSTEM
         // =============================================
         if (activeGroupId && chatId === activeGroupId && msg.reply_to_message) {
-           // আগের মেসেজ থেকে #UID খোঁজা (Text বা Caption দুটোর মধ্যেই)
            let originalText = msg.reply_to_message.text || msg.reply_to_message.caption || "";
            
            const match = originalText.match(/#UID(\d+)/);
@@ -212,9 +247,6 @@ ${isButton ? `🔘 <b>Selected:</b> ${text}` : ""}
              });
              
              await api("sendMessage", { chat_id: activeGroupId, text: "✅ <i>Reply Sent.</i>", parse_mode: "HTML" });
-           } else {
-             // যদি ভুলে ছবির ওপর রিপ্লাই দেন
-             // console.log("⚠️ No UID found. Please reply to the Ticket Header text.");
            }
         }
       }
