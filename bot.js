@@ -77,7 +77,8 @@ async function poll() {
         if (msg.from?.is_bot) continue;
 
         const chatId = msg.chat.id;
-        const text = msg.text || "";
+        // ✅ FIX: Text অথবা Caption যা পাবে তাই নেবে
+        const text = msg.text || msg.caption || ""; 
         const name = msg.from.first_name || "Member";
 
         if (msg.chat.type === "private") userList.add(chatId);
@@ -95,7 +96,7 @@ async function poll() {
                 });
                 continue;
             }
-            // Broadcast code removed for brevity, works as before
+            // Broadcast logic here (skipped for brevity)
         }
 
         // =============================================
@@ -149,23 +150,24 @@ async function poll() {
 
           // --- FORWARD TO ADMIN (Text, Photo, Voice - ALL) ---
           
-          // ১. প্রথমে একটি টিকেট হেডলাইন পাঠাবে
+          // ১. প্রথমে একটি টিকেট হেডলাইন পাঠাবে (যাতে আপনি রিপ্লাই দিতে পারেন)
           const ticketHeader = `
 💎 <b>NEW TICKET</b> | #UID${msg.from.id}
 ━━━━━━━━━━━━━━━━
 👤 <b>User:</b> <a href="tg://user?id=${msg.from.id}">${name}</a>
 🆔 <b>ID:</b> <code>${msg.from.id}</code>
 ${isButton ? `🔘 <b>Selected:</b> ${text}` : ""}
-━━━━━━━━━━━━━━━━`;
+━━━━━━━━━━━━━━━━
+<i>(Reply to this message to answer)</i>`;
 
-          // শুধু বাটন চাপলে হেডার যাবে, আর যদি ইউজার কিছু লিখে/ছবি দেয় তবে কন্টেন্টও যাবে
+          // শুধু বাটন চাপলে হেডার যাবে
           if (isButton) {
              await api("sendMessage", { chat_id: activeGroupId, text: ticketHeader, parse_mode: "HTML" });
           } else {
-             // হেডারটি আগে পাঠাই
+             // টেক্সট বা ছবি হলে: আগে হেডার যাবে, তারপর কন্টেন্ট কপি হবে
              await api("sendMessage", { chat_id: activeGroupId, text: ticketHeader, parse_mode: "HTML" });
              
-             // এরপর আসল কন্টেন্ট (ছবি/টেক্সট) কপি করে পাঠাই
+             // ✅ FIX: copyMessage ব্যবহার করায় ছবি/ভিডিও সব যাবে
              await api("copyMessage", {
                  chat_id: activeGroupId,
                  from_chat_id: chatId,
@@ -173,11 +175,11 @@ ${isButton ? `🔘 <b>Selected:</b> ${text}` : ""}
              });
           }
 
-          // Confirmation to User (Auto delete)
+          // Confirmation to User
           if (!isButton) {
               const sentMsg = await api("sendMessage", {
                 chat_id: chatId,
-                text: "✅ <i>Sent. Please wait...</i>",
+                text: "✅ <i>Received. Please wait...</i>",
                 parse_mode: "HTML",
                 reply_markup: mainKeyboard
               });
@@ -189,16 +191,11 @@ ${isButton ? `🔘 <b>Selected:</b> ${text}` : ""}
         }
 
         // =============================================
-        // 👨‍💻 ADMIN REPLY (Supported: Text, Photo, Sticker)
+        // 👨‍💻 ADMIN REPLY SYSTEM
         // =============================================
         if (activeGroupId && chatId === activeGroupId && msg.reply_to_message) {
-           // আগের মেসেজ থেকে #UID খোঁজা (যদি টেক্সট হয়)
+           // আগের মেসেজ থেকে #UID খোঁজা (Text বা Caption দুটোর মধ্যেই)
            let originalText = msg.reply_to_message.text || msg.reply_to_message.caption || "";
-           
-           // যদি আগের মেসেজটি শুধু কপি করা ছবি হয়, সেখানে UID থাকবে না।
-           // তাই আমরা আগের মেসেজ (Ticket Header) চেক করব।
-           // কিন্তু টেলিগ্রাম বটের সীমাবদ্ধতার কারণে, সব মেসেজেই UID ট্যাগ থাকা জরুরি।
-           // এই কোডে আমরা Ticket Header এ UID রেখেছি, তাই অ্যাডমিনকে *Ticket Header* এ রিপ্লাই দিতে হবে।
            
            const match = originalText.match(/#UID(\d+)/);
 
@@ -207,7 +204,7 @@ ${isButton ? `🔘 <b>Selected:</b> ${text}` : ""}
              await api("sendChatAction", { chat_id: userId, action: "typing" });
              await sleep(800); 
 
-             // Copy Admin's reply to User (Text/Image support)
+             // Copy Admin's reply to User
              await api("copyMessage", {
                  chat_id: userId,
                  from_chat_id: chatId,
@@ -215,6 +212,9 @@ ${isButton ? `🔘 <b>Selected:</b> ${text}` : ""}
              });
              
              await api("sendMessage", { chat_id: activeGroupId, text: "✅ <i>Reply Sent.</i>", parse_mode: "HTML" });
+           } else {
+             // যদি ভুলে ছবির ওপর রিপ্লাই দেন
+             // console.log("⚠️ No UID found. Please reply to the Ticket Header text.");
            }
         }
       }
