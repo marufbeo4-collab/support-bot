@@ -8,23 +8,23 @@ if (!TOKEN) {
 
 const API = `https://api.telegram.org/bot${TOKEN}`;
 
-// ⚠️ আপনার গ্রুপের আইডি এখানে বসান (না হলে সার্ভার রিস্টার্ট দিলে ভুলে যাবে)
-// উদাহরণ: let INBOX_CHAT_ID = -100123456789;
-let INBOX_CHAT_ID = null; 
+// ⚠️ আপনার গ্রুপের আইডি এখানে বসান (Render এ ২৪ ঘণ্টা রানিং রাখার জন্য এটা জরুরি)
+// উদাহরণ: const MAIN_GROUP_ID = -100123456789;
+const MAIN_GROUP_ID = null; 
 
-// ব্রডকাস্টের জন্য ইউজারদের আইডি মনে রাখার মেমোরি
+// ব্রডকাস্ট মেমোরি
 const userList = new Set(); 
 
-// --- KEEP ALIVE SERVER (Render এর জন্য) ---
+// --- KEEP ALIVE SERVER (Render 24/7) ---
 const http = require('http');
 const server = http.createServer((req, res) => {
     res.writeHead(200);
-    res.end('Super Club Bot is Active!');
+    res.end('Super Club Bot is Running...');
 });
 server.listen(process.env.PORT || 8080);
-// ---------------------------------------------------------
+// ----------------------------------------
 
-console.log("🚀 Super Club Bot Started...");
+console.log("💎 Super Club Bot Started Successfully...");
 
 // 2. API Helper
 async function api(method, data) {
@@ -42,11 +42,16 @@ async function api(method, data) {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-// 3. বাটন মেনু (Keyboards)
+// 3. বাটনগুলোর নাম (Variables) - যেন ভুল না হয়
+const CMD_DEPOSIT = "✓DEPOSIT • PROBLEM 💳";
+const CMD_WITHDRAW = "✓WITHDRAW • PROBLEM 💰";
+const CMD_GAMEID = "✓GAME ID PROBLEM 👣";
+const CMD_OTHERS = "✓OTHERS ℹ️";
+
 const mainKeyboard = {
     keyboard: [
-        [{ text: "✓DEPOSIT • PROBLEM 💳" }, { text: "✓WITHDRAW • PROBLEM 💰" }],
-        [{ text: "✓GAME ID PROBLEM 👣" }, { text: "✓OTHERS ℹ️" }]
+        [{ text: CMD_DEPOSIT }, { text: CMD_WITHDRAW }],
+        [{ text: CMD_GAMEID }, { text: CMD_OTHERS }]
     ],
     resize_keyboard: true,
     one_time_keyboard: false
@@ -55,13 +60,16 @@ const mainKeyboard = {
 // 4. Main Loop
 async function poll() {
   let offset = 0;
+  // কোডে আইডি না বসালে টেম্পোরারি ভেরিয়েবল ব্যবহার হবে
+  let activeGroupId = MAIN_GROUP_ID;
+
   while (true) {
     try {
       const res = await fetch(`${API}/getUpdates?timeout=30&offset=${offset}`);
       const data = await res.json();
 
       if (!data.ok) {
-        console.error("❌ API Error:", data.description);
+        console.error("❌ Connection Error:", data.description);
         await sleep(5000);
         continue;
       }
@@ -74,157 +82,196 @@ async function poll() {
 
         const chatId = msg.chat.id;
         const text = msg.text || "";
-        const name = msg.from.first_name || "User";
+        const name = msg.from.first_name || "Member";
 
-        // ইউজার লিস্টে আইডি সেভ করা (Broadcast এর জন্য)
-        if (msg.chat.type === "private") {
-            userList.add(chatId);
-        }
+        // ইউজার লিস্টে সেভ (Broadcast এর জন্য)
+        if (msg.chat.type === "private") userList.add(chatId);
 
-        // ----------- GROUP SETUP & BROADCAST ------------
+        // =============================================
+        // 🏢 GROUP MANAGEMENT (ADMIN SIDE)
+        // =============================================
         if (msg.chat.type === "group" || msg.chat.type === "supergroup") {
             
-            // A. গ্রুপ সেটআপ
+            // সেটআপ কমান্ড
             if (text === "/setgroup") {
-                INBOX_CHAT_ID = chatId;
+                activeGroupId = chatId;
                 await api("sendMessage", {
                     chat_id: chatId,
-                    text: `<b>✅ Super Club Support Connected!</b>\nGroup ID: <code>${chatId}</code>\n(Please paste this ID inside bot.js code for permanent fix)`,
+                    text: `<b>💎 Super Club Support Connected!</b>\n\n🆔 Group ID: <code>${chatId}</code>\n(⚠️ কপি করে কোডের ১০ নম্বর লাইনে বসিয়ে দিন)`,
                     parse_mode: "HTML"
                 });
                 continue;
             }
 
-            // B. ব্রডকাস্ট কমান্ড (Admin only)
-            // নিয়ম: /broadcast আপনার মেসেজ
+            // ব্রডকাস্ট কমান্ড
             if (text.startsWith("/broadcast")) {
-                const messageToSend = text.replace("/broadcast", "").trim();
-                if (!messageToSend) {
-                    await api("sendMessage", { chat_id: chatId, text: "❌ Please write a message. Example:\n/broadcast Hello everyone!" });
-                    continue;
-                }
+                const noticeText = text.replace("/broadcast", "").trim();
+                if (!noticeText) continue;
 
-                let count = 0;
-                await api("sendMessage", { chat_id: chatId, text: `📣 Sending broadcast to ${userList.size} users...` });
+                await api("sendMessage", { chat_id: chatId, text: `📢 Sending notice to ${userList.size} users...` });
 
                 for (const userId of userList) {
                     await api("sendMessage", {
                         chat_id: userId,
-                        text: `📢 <b>NOTICE:</b>\n\n${messageToSend}`,
+                        text: `📢 <b>OFFICIAL NOTICE</b>\n━━━━━━━━━━━━━━━━\n\n${noticeText}\n\n━━━━━━━━━━━━━━━━\n<i>Authorized by Super Club Admin</i>`,
                         parse_mode: "HTML"
                     });
-                    count++;
-                    await sleep(100); // Spam prevent delay
+                    await sleep(50);
                 }
-
-                await api("sendMessage", { chat_id: chatId, text: `✅ Broadcast sent to ${count} users successfully!` });
+                await api("sendMessage", { chat_id: chatId, text: "✅ Broadcast Complete." });
                 continue;
             }
         }
 
-        // ----------- USER PRIVATE CHAT ------------
+        // =============================================
+        // 👤 USER PRIVATE CHAT (CLIENT SIDE)
+        // =============================================
         if (msg.chat.type === "private") {
           
-          // A. Welcome Message (Start)
+          // A. Start Command
           if (text === "/start") {
             await api("sendChatAction", { chat_id: chatId, action: "typing" });
             
             const welcomeMsg = `
-🌟 <b>Super Club-এ স্বাগতম!</b> 🌟
-➖➖➖➖➖➖➖➖➖➖
+🌟 <b>WELCOME TO SUPER CLUB</b> 🌟
+━━━━━━━━━━━━━━━━━━━━━━
 প্রিয় ${name},
-Super Club সাপোর্টে আপনাকে স্বাগতম। আপনার যেকোনো সমস্যা বা অভিযোগের বিস্তারিত নিচে লিখুন অথবা মেনু থেকে বাটন সিলেক্ট করুন।
+আমাদের প্রিমিয়াম সাপোর্টে আপনাকে স্বাগতম।
 
-আমাদের টিম খুব শীঘ্রই আপনার সাথে যোগাযোগ করবে। ধন্যবাদ! ❤️
+নিচের মেনু থেকে আপনার সমস্যার বিষয়টি সিলেক্ট করুন। আমাদের দক্ষ এজেন্টরা ২৪/৭ আপনার সেবায় নিয়োজিত। ❤️
+
+<i>Choose an option below:</i>
             `;
 
             await api("sendMessage", {
               chat_id: chatId,
               text: welcomeMsg,
               parse_mode: "HTML",
-              reply_markup: mainKeyboard // বাটন শো করবে
+              reply_markup: mainKeyboard
             });
             continue;
           }
 
           // B. Offline Check
-          if (!INBOX_CHAT_ID) {
+          if (!activeGroupId) {
             await api("sendMessage", {
               chat_id: chatId,
-              text: "⚠️ <i>System is currently updating. Please wait.</i>",
+              text: "⚠️ <i>System Maintenance Mode. Please try again later.</i>",
               parse_mode: "HTML"
             });
             continue;
           }
 
-          // C. Forward to Admin Group
+          // C. AUTO-REPLY LOGIC (User Side) & TAGGING (Admin Side)
+          let categoryTag = "💬 <b>User Message:</b>"; // সাধারণ মেসেজ হলে
+          let isButton = false;
+
+          // ১. ডিপোজিট বাটন
+          if (text === CMD_DEPOSIT) {
+              isButton = true;
+              categoryTag = `💳 <b>Category:</b> ${CMD_DEPOSIT}`; // গ্রুপে এভাবে যাবে
+              await api("sendMessage", {
+                  chat_id: chatId,
+                  text: "💳 <b>ডিপোজিট সমস্যা?</b>\n\nঅনুগ্রহ করে নিচে তথ্যগুলো দিন:\n1. আপনার গেম আইডি\n2. ট্রানজেকশন আইডি (TrxID)\n3. পেমেন্টের স্ক্রিনশট",
+                  parse_mode: "HTML"
+              });
+          } 
+          // ২. উইথড্র বাটন
+          else if (text === CMD_WITHDRAW) {
+              isButton = true;
+              categoryTag = `💰 <b>Category:</b> ${CMD_WITHDRAW}`; // গ্রুপে এভাবে যাবে
+              await api("sendMessage", {
+                  chat_id: chatId,
+                  text: "💰 <b>উইথড্র সমস্যা?</b>\n\nঅনুগ্রহ করে নিচে তথ্যগুলো দিন:\n1. আপনার গেম আইডি\n2. কত টাকা উইথড্র দিয়েছেন?\n3. কোন মেথডে (Bkash/Nagad) দিয়েছেন?",
+                  parse_mode: "HTML"
+              });
+          }
+          // ৩. গেম আইডি বাটন
+          else if (text === CMD_GAMEID) {
+              isButton = true;
+              categoryTag = `👣 <b>Category:</b> ${CMD_GAMEID}`;
+              await api("sendMessage", {
+                  chat_id: chatId,
+                  text: "👣 <b>গেম আইডি সমস্যা?</b>\n\nআপনার সঠিক গেম আইডিটি লিখে পাঠান এবং সমস্যার স্ক্রিনশট দিন।",
+                  parse_mode: "HTML"
+              });
+          }
+          // ৪. অন্যান্য বাটন
+          else if (text === CMD_OTHERS) {
+              isButton = true;
+              categoryTag = `ℹ️ <b>Category:</b> ${CMD_OTHERS}`;
+              await api("sendMessage", {
+                  chat_id: chatId,
+                  text: "ℹ️ <b>অন্যান্য সাহায্য</b>\n\nআপনার সমস্যাটি বিস্তারিত লিখে জানান। আমাদের এজেন্ট শীঘ্রই রিপ্লাই দিবে।",
+                  parse_mode: "HTML"
+              });
+          }
+
+          // D. Forward to Admin Group (এখানেই গ্রুপে ফুল টেক্সট যাবে)
           const adminMsg = `
-🔔 <b>New Support Ticket</b>
-➖➖➖➖➖➖➖➖➖➖
+💎 <b>NEW TICKET</b> | #UID${msg.from.id}
+━━━━━━━━━━━━━━━━
 👤 <b>User:</b> <a href="tg://user?id=${msg.from.id}">${name}</a>
 🆔 <b>ID:</b> <code>${msg.from.id}</code>
-➖➖➖➖➖➖➖➖➖➖
-💬 <b>Subject/Message:</b>
-${text}
-
-#UID${msg.from.id}
+━━━━━━━━━━━━━━━━
+${categoryTag}
+${isButton ? "" : text} 
           `;
+          // isButton ? "" : text -> মানে বাটন চাপলে মেসেজ বডিতে টেক্সট রিপিট হবে না, শুধু ক্যাটাগরি দেখাবে।
+          // আর যদি ইউজার নিজের হাতে কিছু লিখে, তাহলে সেটা দেখাবে।
 
           await api("sendMessage", {
-            chat_id: INBOX_CHAT_ID,
+            chat_id: activeGroupId,
             text: adminMsg,
             parse_mode: "HTML"
           });
 
-          // D. Confirmation to User (Auto Delete)
-          const sentMsg = await api("sendMessage", {
-            chat_id: chatId,
-            text: "✅ <i>আপনার মেসেজটি আমাদের টিমের কাছে পৌঁছেছে। অনুগ্রহ করে অপেক্ষা করুন।</i>",
-            parse_mode: "HTML",
-            reply_markup: mainKeyboard // বাটনগুলো আবার দেখাবে
-          });
-
-          // 5 সেকেন্ড পর কনফার্মেশন মেসেজ ডিলিট হবে
-          if (sentMsg?.result?.message_id) {
-            setTimeout(() => {
-              api("deleteMessage", {
+          // E. Confirmation (সাধারণ মেসেজের জন্য)
+          if (!isButton) {
+              const sentMsg = await api("sendMessage", {
                 chat_id: chatId,
-                message_id: sentMsg.result.message_id
+                text: "✅ <i>মেসেজ রিসিভ হয়েছে। অপেক্ষা করুন।</i>",
+                parse_mode: "HTML",
+                reply_markup: mainKeyboard
               });
-            }, 5000);
+              
+              if (sentMsg?.result?.message_id) {
+                setTimeout(() => {
+                  api("deleteMessage", { chat_id: chatId, message_id: sentMsg.result.message_id });
+                }, 5000);
+              }
           }
           continue;
         }
 
-        // ----------- ADMIN REPLY SYSTEM ------------
-        if (INBOX_CHAT_ID && chatId === INBOX_CHAT_ID && msg.reply_to_message) {
+        // =============================================
+        // 👨‍💻 ADMIN REPLY (ANONYMOUS)
+        // =============================================
+        if (activeGroupId && chatId === activeGroupId && msg.reply_to_message) {
            const originalText = msg.reply_to_message.text || "";
            const match = originalText.match(/#UID(\d+)/);
 
            if (match) {
              const userId = match[1];
              
-             // Typing effect
              await api("sendChatAction", { chat_id: userId, action: "typing" });
-             await sleep(1000); 
+             await sleep(800); 
 
-             // Send Reply
              await api("sendMessage", {
                chat_id: userId,
-               text: text 
+               text: text
              });
              
-             // Admin Confirmation
              await api("sendMessage", {
-                chat_id: INBOX_CHAT_ID,
-                text: "✅ <i>Sent.</i>",
+                chat_id: activeGroupId,
+                text: "✅ <i>Reply Sent.</i>",
                 parse_mode: "HTML"
              });
            }
         }
       }
     } catch (err) {
-      console.error("🔥 Error:", err.message);
+      console.error("🔥 System Error:", err.message);
       await sleep(3000);
     }
   }
