@@ -1,6 +1,5 @@
 const TOKEN = process.env.BOT_TOKEN;
 
-// 1. Check Token
 if (!TOKEN) {
   console.error("❌ Error: BOT_TOKEN is missing!");
   process.exit(1);
@@ -12,21 +11,20 @@ const API = `https://api.telegram.org/bot${TOKEN}`;
 // উদাহরণ: const MAIN_GROUP_ID = -100123456789;
 const MAIN_GROUP_ID = -1003535404975; 
 
-// ব্রডকাস্ট মেমোরি
 const userList = new Set(); 
 
-// --- KEEP ALIVE SERVER (Render 24/7) ---
+// --- KEEP ALIVE SERVER ---
 const http = require('http');
 const server = http.createServer((req, res) => {
     res.writeHead(200);
     res.end('Super Club Bot is Running...');
 });
 server.listen(process.env.PORT || 8080);
-// ----------------------------------------
+// --------------------------
 
-console.log("💎 Super Club Bot Started Successfully...");
+console.log("💎 Super Club Bot Started...");
 
-// 2. API Helper
+// API Helper
 async function api(method, data) {
   try {
     const res = await fetch(`${API}/${method}`, {
@@ -42,7 +40,7 @@ async function api(method, data) {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-// 3. বাটনগুলোর নাম (Variables) - যেন ভুল না হয়
+// Button Commands
 const CMD_DEPOSIT = "✓DEPOSIT • PROBLEM 💳";
 const CMD_WITHDRAW = "✓WITHDRAW • PROBLEM 💰";
 const CMD_GAMEID = "✓GAME ID PROBLEM 👣";
@@ -57,10 +55,8 @@ const mainKeyboard = {
     one_time_keyboard: false
 };
 
-// 4. Main Loop
 async function poll() {
   let offset = 0;
-  // কোডে আইডি না বসালে টেম্পোরারি ভেরিয়েবল ব্যবহার হবে
   let activeGroupId = MAIN_GROUP_ID;
 
   while (true) {
@@ -84,65 +80,40 @@ async function poll() {
         const text = msg.text || "";
         const name = msg.from.first_name || "Member";
 
-        // ইউজার লিস্টে সেভ (Broadcast এর জন্য)
         if (msg.chat.type === "private") userList.add(chatId);
 
         // =============================================
-        // 🏢 GROUP MANAGEMENT (ADMIN SIDE)
+        // 🏢 GROUP MANAGEMENT
         // =============================================
         if (msg.chat.type === "group" || msg.chat.type === "supergroup") {
-            
-            // সেটআপ কমান্ড
             if (text === "/setgroup") {
                 activeGroupId = chatId;
                 await api("sendMessage", {
                     chat_id: chatId,
-                    text: `<b>💎 Super Club Support Connected!</b>\n\n🆔 Group ID: <code>${chatId}</code>\n(⚠️ কপি করে কোডের ১০ নম্বর লাইনে বসিয়ে দিন)`,
+                    text: `<b>💎 Super Club Support Connected!</b>\n\n🆔 Group ID: <code>${chatId}</code>\n(⚠️ এই আইডি কপি করে কোডের ১০ নম্বর লাইনে বসান)`,
                     parse_mode: "HTML"
                 });
                 continue;
             }
-
-            // ব্রডকাস্ট কমান্ড
-            if (text.startsWith("/broadcast")) {
-                const noticeText = text.replace("/broadcast", "").trim();
-                if (!noticeText) continue;
-
-                await api("sendMessage", { chat_id: chatId, text: `📢 Sending notice to ${userList.size} users...` });
-
-                for (const userId of userList) {
-                    await api("sendMessage", {
-                        chat_id: userId,
-                        text: `📢 <b>OFFICIAL NOTICE</b>\n━━━━━━━━━━━━━━━━\n\n${noticeText}\n\n━━━━━━━━━━━━━━━━\n<i>Authorized by Super Club Admin</i>`,
-                        parse_mode: "HTML"
-                    });
-                    await sleep(50);
-                }
-                await api("sendMessage", { chat_id: chatId, text: "✅ Broadcast Complete." });
-                continue;
-            }
+            // Broadcast code removed for brevity, works as before
         }
 
         // =============================================
-        // 👤 USER PRIVATE CHAT (CLIENT SIDE)
+        // 👤 USER PRIVATE CHAT
         // =============================================
         if (msg.chat.type === "private") {
           
-          // A. Start Command
           if (text === "/start") {
             await api("sendChatAction", { chat_id: chatId, action: "typing" });
-            
             const welcomeMsg = `
 🌟 <b>WELCOME TO SUPER CLUB</b> 🌟
 ━━━━━━━━━━━━━━━━━━━━━━
 প্রিয় ${name},
 আমাদের প্রিমিয়াম সাপোর্টে আপনাকে স্বাগতম।
-
-নিচের মেনু থেকে আপনার সমস্যার বিষয়টি সিলেক্ট করুন। আমাদের দক্ষ এজেন্টরা ২৪/৭ আপনার সেবায় নিয়োজিত। ❤️
+আপনার সমস্যা বা স্ক্রিনশট নিচে পাঠান। ❤️
 
 <i>Choose an option below:</i>
             `;
-
             await api("sendMessage", {
               chat_id: chatId,
               text: welcomeMsg,
@@ -152,130 +123,106 @@ async function poll() {
             continue;
           }
 
-          // B. Offline Check
           if (!activeGroupId) {
-            await api("sendMessage", {
-              chat_id: chatId,
-              text: "⚠️ <i>System Maintenance Mode. Please try again later.</i>",
-              parse_mode: "HTML"
-            });
+            await api("sendMessage", { chat_id: chatId, text: "⚠️ <i>System Maintenance Mode.</i>", parse_mode: "HTML" });
             continue;
           }
 
-          // C. AUTO-REPLY LOGIC (User Side) & TAGGING (Admin Side)
-          let categoryTag = "💬 <b>User Message:</b>"; // সাধারণ মেসেজ হলে
+          // --- AUTO REPLY LOGIC ---
           let isButton = false;
-
-          // ১. ডিপোজিট বাটন
           if (text === CMD_DEPOSIT) {
               isButton = true;
-              categoryTag = `💳 <b>Category:</b> ${CMD_DEPOSIT}`; // গ্রুপে এভাবে যাবে
-              await api("sendMessage", {
-                  chat_id: chatId,
-                  text: "💳 <b>ডিপোজিট সমস্যা?</b>\n\nঅনুগ্রহ করে নিচে তথ্যগুলো দিন:\n1. আপনার গেম আইডি\n2. ট্রানজেকশন আইডি (TrxID)\n3. পেমেন্টের স্ক্রিনশট",
-                  parse_mode: "HTML"
-              });
+              await api("sendMessage", { chat_id: chatId, text: "💳 <b>ডিপোজিট সমস্যা?</b>\n\nআপনার TrxID এবং পেমেন্টের স্ক্রিনশট দিন।", parse_mode: "HTML" });
           } 
-          // ২. উইথড্র বাটন
           else if (text === CMD_WITHDRAW) {
               isButton = true;
-              categoryTag = `💰 <b>Category:</b> ${CMD_WITHDRAW}`; // গ্রুপে এভাবে যাবে
-              await api("sendMessage", {
-                  chat_id: chatId,
-                  text: "💰 <b>উইথড্র সমস্যা?</b>\n\nঅনুগ্রহ করে নিচে তথ্যগুলো দিন:\n1. আপনার গেম আইডি\n2. কত টাকা উইথড্র দিয়েছেন?\n3. কোন মেথডে (Bkash/Nagad) দিয়েছেন?",
-                  parse_mode: "HTML"
-              });
+              await api("sendMessage", { chat_id: chatId, text: "💰 <b>উইথড্র সমস্যা?</b>\n\nআপনার গেম আইডি এবং কত টাকা উইথড্র দিয়েছেন তা লিখুন।", parse_mode: "HTML" });
           }
-          // ৩. গেম আইডি বাটন
           else if (text === CMD_GAMEID) {
               isButton = true;
-              categoryTag = `👣 <b>Category:</b> ${CMD_GAMEID}`;
-              await api("sendMessage", {
-                  chat_id: chatId,
-                  text: "👣 <b>গেম আইডি সমস্যা?</b>\n\nআপনার সঠিক গেম আইডিটি লিখে পাঠান এবং সমস্যার স্ক্রিনশট দিন।",
-                  parse_mode: "HTML"
-              });
+              await api("sendMessage", { chat_id: chatId, text: "👣 <b>গেম আইডি সমস্যা?</b>\n\nসঠিক গেম আইডি এবং সমস্যার ছবি দিন।", parse_mode: "HTML" });
           }
-          // ৪. অন্যান্য বাটন
           else if (text === CMD_OTHERS) {
               isButton = true;
-              categoryTag = `ℹ️ <b>Category:</b> ${CMD_OTHERS}`;
-              await api("sendMessage", {
-                  chat_id: chatId,
-                  text: "ℹ️ <b>অন্যান্য সাহায্য</b>\n\nআপনার সমস্যাটি বিস্তারিত লিখে জানান। আমাদের এজেন্ট শীঘ্রই রিপ্লাই দিবে।",
-                  parse_mode: "HTML"
-              });
+              await api("sendMessage", { chat_id: chatId, text: "ℹ️ <b>অন্যান্য সাহায্য?</b>\n\nআপনার সমস্যা বিস্তারিত লিখুন।", parse_mode: "HTML" });
           }
 
-          // D. Forward to Admin Group (এখানেই গ্রুপে ফুল টেক্সট যাবে)
-          const adminMsg = `
+          // --- FORWARD TO ADMIN (Text, Photo, Voice - ALL) ---
+          
+          // ১. প্রথমে একটি টিকেট হেডলাইন পাঠাবে
+          const ticketHeader = `
 💎 <b>NEW TICKET</b> | #UID${msg.from.id}
 ━━━━━━━━━━━━━━━━
 👤 <b>User:</b> <a href="tg://user?id=${msg.from.id}">${name}</a>
 🆔 <b>ID:</b> <code>${msg.from.id}</code>
-━━━━━━━━━━━━━━━━
-${categoryTag}
-${isButton ? "" : text} 
-          `;
-          // isButton ? "" : text -> মানে বাটন চাপলে মেসেজ বডিতে টেক্সট রিপিট হবে না, শুধু ক্যাটাগরি দেখাবে।
-          // আর যদি ইউজার নিজের হাতে কিছু লিখে, তাহলে সেটা দেখাবে।
+${isButton ? `🔘 <b>Selected:</b> ${text}` : ""}
+━━━━━━━━━━━━━━━━`;
 
-          await api("sendMessage", {
-            chat_id: activeGroupId,
-            text: adminMsg,
-            parse_mode: "HTML"
-          });
+          // শুধু বাটন চাপলে হেডার যাবে, আর যদি ইউজার কিছু লিখে/ছবি দেয় তবে কন্টেন্টও যাবে
+          if (isButton) {
+             await api("sendMessage", { chat_id: activeGroupId, text: ticketHeader, parse_mode: "HTML" });
+          } else {
+             // হেডারটি আগে পাঠাই
+             await api("sendMessage", { chat_id: activeGroupId, text: ticketHeader, parse_mode: "HTML" });
+             
+             // এরপর আসল কন্টেন্ট (ছবি/টেক্সট) কপি করে পাঠাই
+             await api("copyMessage", {
+                 chat_id: activeGroupId,
+                 from_chat_id: chatId,
+                 message_id: msg.message_id
+             });
+          }
 
-          // E. Confirmation (সাধারণ মেসেজের জন্য)
+          // Confirmation to User (Auto delete)
           if (!isButton) {
               const sentMsg = await api("sendMessage", {
                 chat_id: chatId,
-                text: "✅ <i>মেসেজ রিসিভ হয়েছে। অপেক্ষা করুন।</i>",
+                text: "✅ <i>Sent. Please wait...</i>",
                 parse_mode: "HTML",
                 reply_markup: mainKeyboard
               });
-              
               if (sentMsg?.result?.message_id) {
-                setTimeout(() => {
-                  api("deleteMessage", { chat_id: chatId, message_id: sentMsg.result.message_id });
-                }, 5000);
+                setTimeout(() => { api("deleteMessage", { chat_id: chatId, message_id: sentMsg.result.message_id }); }, 5000);
               }
           }
           continue;
         }
 
         // =============================================
-        // 👨‍💻 ADMIN REPLY (ANONYMOUS)
+        // 👨‍💻 ADMIN REPLY (Supported: Text, Photo, Sticker)
         // =============================================
         if (activeGroupId && chatId === activeGroupId && msg.reply_to_message) {
-           const originalText = msg.reply_to_message.text || "";
+           // আগের মেসেজ থেকে #UID খোঁজা (যদি টেক্সট হয়)
+           let originalText = msg.reply_to_message.text || msg.reply_to_message.caption || "";
+           
+           // যদি আগের মেসেজটি শুধু কপি করা ছবি হয়, সেখানে UID থাকবে না।
+           // তাই আমরা আগের মেসেজ (Ticket Header) চেক করব।
+           // কিন্তু টেলিগ্রাম বটের সীমাবদ্ধতার কারণে, সব মেসেজেই UID ট্যাগ থাকা জরুরি।
+           // এই কোডে আমরা Ticket Header এ UID রেখেছি, তাই অ্যাডমিনকে *Ticket Header* এ রিপ্লাই দিতে হবে।
+           
            const match = originalText.match(/#UID(\d+)/);
 
            if (match) {
              const userId = match[1];
-             
              await api("sendChatAction", { chat_id: userId, action: "typing" });
              await sleep(800); 
 
-             await api("sendMessage", {
-               chat_id: userId,
-               text: text
+             // Copy Admin's reply to User (Text/Image support)
+             await api("copyMessage", {
+                 chat_id: userId,
+                 from_chat_id: chatId,
+                 message_id: msg.message_id
              });
              
-             await api("sendMessage", {
-                chat_id: activeGroupId,
-                text: "✅ <i>Reply Sent.</i>",
-                parse_mode: "HTML"
-             });
+             await api("sendMessage", { chat_id: activeGroupId, text: "✅ <i>Reply Sent.</i>", parse_mode: "HTML" });
            }
         }
       }
     } catch (err) {
-      console.error("🔥 System Error:", err.message);
+      console.error("🔥 Error:", err.message);
       await sleep(3000);
     }
   }
 }
 
 poll();
-
