@@ -10,7 +10,7 @@ const API = `https://api.telegram.org/bot${TOKEN}`;
 
 // ⚠️ আপনার গ্রুপের আইডি এখানে বসান (Render এ ২৪ ঘণ্টা রানিং রাখার জন্য এটা জরুরি)
 // উদাহরণ: const MAIN_GROUP_ID = -100123456789;
-const MAIN_GROUP_ID = null; 
+const MAIN_GROUP_ID = -1003535404975; 
 
 // ব্রডকাস্ট মেমোরি
 const userList = new Set(); 
@@ -278,3 +278,4 @@ ${isButton ? "" : text}
 }
 
 poll();
+
