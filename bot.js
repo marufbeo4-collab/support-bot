@@ -40,11 +40,13 @@ async function api(method, data) {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-// Button Commands
-const CMD_DEPOSIT = "✓DEPOSIT • PROBLEM 💳";
-const CMD_WITHDRAW = "✓WITHDRAW • PROBLEM 💰";
-const CMD_GAMEID = "✓GAME ID PROBLEM 👣";
-const CMD_OTHERS = "✓OTHERS ℹ️";
+// ==========================================
+// ✅ UPDATED BUTTON COMMANDS (SIMPLE)
+// ==========================================
+const CMD_DEPOSIT = "DEPOSIT • PROBLEM";
+const CMD_WITHDRAW = "WITHDRAW • PROBLEM";
+const CMD_GAMEID = "GAME ID PROBLEM";
+const CMD_OTHERS = "OTHERS ℹ️";
 
 const mainKeyboard = {
     keyboard: [
@@ -77,7 +79,6 @@ async function poll() {
         if (msg.from?.is_bot) continue;
 
         const chatId = msg.chat.id;
-        // ✅ FIX: Text অথবা Caption যা পাবে তাই নেবে
         const text = msg.text || msg.caption || ""; 
         const name = msg.from.first_name || "Member";
 
@@ -97,7 +98,7 @@ async function poll() {
                 continue;
             }
             
-            // Broadcast Command
+            // Broadcast
             if (text.startsWith("/broadcast")) {
                 const noticeText = text.replace("/broadcast", "").trim();
                 if (!noticeText) continue;
@@ -146,7 +147,7 @@ async function poll() {
             continue;
           }
 
-          // --- YOUR CUSTOM AUTO REPLY LOGIC ---
+          // --- AUTO REPLY LOGIC ---
           let isButton = false;
           
           // 1. DEPOSIT
@@ -186,8 +187,7 @@ async function poll() {
               });
           }
 
-          // --- FORWARD TO ADMIN (Text, Photo, Voice - ALL) ---
-          
+          // --- FORWARD TO ADMIN ---
           const ticketHeader = `
 💎 <b>NEW TICKET</b> | #UID${msg.from.id}
 ━━━━━━━━━━━━━━━━
@@ -200,10 +200,7 @@ ${isButton ? `🔘 <b>Selected:</b> ${text}` : ""}
           if (isButton) {
              await api("sendMessage", { chat_id: activeGroupId, text: ticketHeader, parse_mode: "HTML" });
           } else {
-             // হেডার পাঠানো
              await api("sendMessage", { chat_id: activeGroupId, text: ticketHeader, parse_mode: "HTML" });
-             
-             // আসল মেসেজ (ছবি/টেক্সট) কপি করা
              await api("copyMessage", {
                  chat_id: activeGroupId,
                  from_chat_id: chatId,
@@ -211,7 +208,7 @@ ${isButton ? `🔘 <b>Selected:</b> ${text}` : ""}
              });
           }
 
-          // Confirmation to User
+          // Confirmation
           if (!isButton) {
               const sentMsg = await api("sendMessage", {
                 chat_id: chatId,
@@ -231,7 +228,6 @@ ${isButton ? `🔘 <b>Selected:</b> ${text}` : ""}
         // =============================================
         if (activeGroupId && chatId === activeGroupId && msg.reply_to_message) {
            let originalText = msg.reply_to_message.text || msg.reply_to_message.caption || "";
-           
            const match = originalText.match(/#UID(\d+)/);
 
            if (match) {
@@ -239,7 +235,6 @@ ${isButton ? `🔘 <b>Selected:</b> ${text}` : ""}
              await api("sendChatAction", { chat_id: userId, action: "typing" });
              await sleep(800); 
 
-             // Copy Admin's reply to User
              await api("copyMessage", {
                  chat_id: userId,
                  from_chat_id: chatId,
