@@ -39,6 +39,17 @@ async function api(method, data) {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+// নাম বা লেখায় যদি < > থাকে, সেটা ঠিক করার জন্য
+function escapeHtml(text) {
+    if (!text) return text;
+    return text
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#039;");
+}
+
 // ==============================
 // ✅ মেনু বাটন
 // ==============================
@@ -57,22 +68,21 @@ const mainKeyboard = {
 };
 
 // --- অ্যালবাম পাঠানোর ফাংশন ---
-async function sendAlbumGroup(groupId, chatId, name) {
+async function sendAlbumGroup(groupId, chatId, firstName, username) {
     const messages = albumBucket[groupId].messages;
     delete albumBucket[groupId]; 
 
     if (!messages || messages.length === 0) return;
 
-    // ১. কাস্টমারের আসল ক্যাপশন খুঁজে বের করা
+    // ১. ক্যাপশন বের করা
     const msgWithCaption = messages.find(m => m.caption);
     const originalCaption = msgWithCaption ? msgWithCaption.caption : "";
 
-    // ২. মিডিয়া সাজানো (আমরা ক্যাপশনে হাত দেব না, শুধু কপি করব)
+    // ২. মিডিয়া অ্যারে
     const mediaArray = messages.map((msg, index) => {
         let caption = "";
-        // শুধু প্রথম ছবিতে কাস্টমারের ক্যাপশন দেব (যদি থাকে)
         if (index === 0 && originalCaption) {
-            caption = originalCaption;
+            caption = originalCaption; // শুধু ১ম ছবিতে ক্যাপশন থাকবে
         }
 
         if (msg.photo) {
@@ -83,14 +93,18 @@ async function sendAlbumGroup(groupId, chatId, name) {
         return null;
     }).filter(m => m !== null);
 
-    // ৩. অ্যালবাম পাঠানো
+    // ৩. পাঠানো
     if (mediaArray.length > 0) {
         await api("sendMediaGroup", { chat_id: MAIN_GROUP_ID, media: mediaArray });
         
-        // ৪. নাম এবং আইডি আলাদা মেসেজে পাঠানো (যাতে রিপ্লাই দেওয়া যায়)
+        // ৪. নাম ও ইউজারনেমসহ আলাদা নোটিফিকেশন
+        const userHandle = username ? `(@${username})` : "";
+        const fullName = escapeHtml(`${firstName} ${userHandle}`);
+        const userLink = `<a href="tg://user?id=${chatId}">${fullName}</a>`;
+
         await api("sendMessage", { 
             chat_id: MAIN_GROUP_ID, 
-            text: `👤 <b>${name}</b> sent these photos 👆\n🆔 #UID${chatId}`, 
+            text: `👤 <b>${userLink}</b> sent these photos 👆\n🆔 #UID${chatId}`, 
             parse_mode: "HTML" 
         });
     }
@@ -117,7 +131,10 @@ async function poll() {
 
         const chatId = msg.chat.id;
         const text = msg.text || msg.caption || ""; 
-        const name = msg.from.first_name || "Member";
+        
+        // নাম এবং ইউজারনেম বের করা
+        const firstName = msg.from.first_name || "Member";
+        const username = msg.from.username || ""; // @username (যদি থাকে)
 
         // ==============================
         // 🏢 GROUP SIDE
@@ -128,7 +145,6 @@ async function poll() {
                 continue;
             }
 
-            // রিপ্লাই সিস্টেম
             if (chatId === MAIN_GROUP_ID && msg.reply_to_message) {
                 let originalText = msg.reply_to_message.text || msg.reply_to_message.caption || "";
                 const match = originalText.match(/#UID(\d+)/);
@@ -148,7 +164,7 @@ async function poll() {
                             reaction: [{ type: "emoji", emoji: "⚡" }]
                         });
                     } else {
-                        await api("sendMessage", { chat_id: chatId, text: `❌ Failed (Blocked)`, parse_mode: "HTML" });
+                        await api("sendMessage", { chat_id: chatId, text: `❌ Failed`, parse_mode: "HTML" });
                     }
                 }
             }
@@ -163,7 +179,7 @@ async function poll() {
           if (text === "/start") {
             await api("sendMessage", {
               chat_id: chatId,
-              text: `🌟 <b>WELCOME TO SUPER CLUB</b>\nপ্রিয় ${name}, আপনার সমস্যাটি নিচে বাটন সিলেক্ট করে জানান।`,
+              text: `🌟 <b>WELCOME TO SUPER CLUB</b>\nপ্রিয় ${escapeHtml(firstName)}, আপনার সমস্যাটি নিচে বাটন সিলেক্ট করে জানান।`,
               parse_mode: "HTML",
               reply_markup: mainKeyboard
             });
@@ -180,33 +196,38 @@ async function poll() {
               if (!albumBucket[groupId]) {
                   albumBucket[groupId] = {
                       messages: [],
-                      timer: setTimeout(() => sendAlbumGroup(groupId, chatId, name), 2500)
+                      timer: setTimeout(() => sendAlbumGroup(groupId, chatId, firstName, username), 2500)
                   };
               }
               albumBucket[groupId].messages.push(msg);
               continue;
           }
 
-          // SINGLE MESSAGE (Simple Forward Style)
+          // SINGLE MESSAGE LOGIC
           
+          // ইউজার লিংক তৈরি (নাম + ইউজারনেম)
+          const userHandle = username ? `(@${username})` : "";
+          const fullName = escapeHtml(`${firstName} ${userHandle}`);
+          const userLink = `<a href="tg://user?id=${chatId}">${fullName}</a>`;
+
           // ১. টেক্সট মেসেজ
           if (text && !msg.photo && !msg.video && !msg.voice && !msg.document) {
-              const prettyMsg = `👤 <b>${name}</b>:\n${text}\n\n🆔 #UID${chatId}`;
+              const prettyMsg = `👤 <b>${userLink}</b>:\n${escapeHtml(text)}\n\n🆔 #UID${chatId}`;
               await api("sendMessage", { chat_id: MAIN_GROUP_ID, text: prettyMsg, parse_mode: "HTML", disable_web_page_preview: true });
           } 
-          // ২. ছবি / ভিডিও / ডকুমেন্ট / ভয়েস
+          // ২. মিডিয়া (ছবি/ভিডিও/ভয়েস)
           else {
-              // ক) আগে আসল মেসেজটা কপি করে পাঠাও (ক্যাপশন সহ)
+              // ক) আসল মিডিয়া পাঠানো (ক্যাপশন সহ)
               await api("copyMessage", { 
                   chat_id: MAIN_GROUP_ID, 
                   from_chat_id: chatId, 
                   message_id: msg.message_id 
               });
 
-              // খ) এরপর আলাদা মেসেজে নাম আর আইডি পাঠাও (রিপ্লাই করার জন্য)
+              // খ) নোটিফিকেশন (নাম + ইউজারনেম সহ)
               await api("sendMessage", { 
                   chat_id: MAIN_GROUP_ID, 
-                  text: `👤 <b>${name}</b> sent this 👆\n🆔 #UID${chatId}`, 
+                  text: `👤 <b>${userLink}</b> sent this 👆\n🆔 #UID${chatId}`, 
                   parse_mode: "HTML" 
               });
           }
