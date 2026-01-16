@@ -39,7 +39,7 @@ async function api(method, data) {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-// HTML ক্যারেক্টার ঠিক করার ফাংশন (যাতে < > দিলে এরর না খায়)
+// HTML সিম্বল ফিক্স করার ফাংশন
 function escapeHtml(text) {
     if (!text) return text;
     return text
@@ -67,35 +67,36 @@ const mainKeyboard = {
     one_time_keyboard: false
 };
 
-// --- অ্যালবাম পাঠানোর ফাংশন (FIXED) ---
+// --- অ্যালবাম পাঠানোর মেইন ফাংশন ---
 async function sendAlbumGroup(groupId, chatId, name) {
     const messages = albumBucket[groupId].messages;
     delete albumBucket[groupId]; 
 
     if (!messages || messages.length === 0) return;
 
-    // ১. পুরো অ্যালবাম খুঁজে কাস্টমারের লেখা বের করা
-    let foundCaption = "";
-    for (const m of messages) {
-        if (m.caption) {
-            foundCaption = m.caption;
-            break; // লেখা পেয়ে গেলে থামা
-        }
-    }
+    // ১. সব মেসেজ ঘেঁটে ক্যাপশন বের করা
+    // (যে ছবিতেই ক্যাপশন থাকুক, আমরা সেটা খুঁজে বের করবই)
+    const msgWithCaption = messages.find(m => m.caption);
+    const userCaption = msgWithCaption ? msgWithCaption.caption : "";
 
     // ২. মিডিয়া অ্যারে সাজানো
     const mediaArray = messages.map((msg, index) => {
-        // শুধু প্রথম ছবিতে কাস্টমারের লেখাটা অ্যাড করব (যাতে সুন্দর দেখায়)
         let finalCaption = "";
         
-        // ইউজারের নাম ও আইডি ট্যাগ (সব ছবিতে থাকবে যাতে রিপ্লাই করা যায়)
+        // অ্যাডমিন ট্যাগ (নাম ও আইডি)
         const adminTag = `👤 <b>${name}</b>\n🆔 #UID${chatId}`;
 
-        if (index === 0 && foundCaption) {
-            // প্রথম ছবিতে: লেখা + ট্যাগ
-            finalCaption = `📝 ${escapeHtml(foundCaption)}\n\n${adminTag}`;
+        // শুধুমাত্র ১ম ছবিতে ক্যাপশন বসাবো
+        if (index === 0) {
+            if (userCaption) {
+                // যদি কাস্টমারের লেখা থাকে
+                finalCaption = `📝 ${escapeHtml(userCaption)}\n\n${adminTag}`;
+            } else {
+                // লেখা না থাকলে শুধু নাম
+                finalCaption = adminTag;
+            }
         } else {
-            // বাকি ছবিতে: শুধু ট্যাগ
+            // বাকি ছবিতে শুধু নাম
             finalCaption = adminTag;
         }
         
@@ -144,6 +145,7 @@ async function poll() {
                 continue;
             }
 
+            // রিপ্লাই সিস্টেম
             if (chatId === MAIN_GROUP_ID && msg.reply_to_message) {
                 let originalText = msg.reply_to_message.text || msg.reply_to_message.caption || "";
                 const match = originalText.match(/#UID(\d+)/);
@@ -163,7 +165,7 @@ async function poll() {
                             reaction: [{ type: "emoji", emoji: "⚡" }]
                         });
                     } else {
-                        await api("sendMessage", { chat_id: chatId, text: `❌ Blocked/Failed`, parse_mode: "HTML" });
+                        await api("sendMessage", { chat_id: chatId, text: `❌ Failed (Blocked)`, parse_mode: "HTML" });
                     }
                 }
             }
@@ -189,13 +191,14 @@ async function poll() {
           else if (text === CMD_WITHDRAW) await api("sendMessage", { chat_id: chatId, text: "💰 <b>উইথড্র সমস্যা?</b>\n\n১. গেম আইডি\n২. টাকার পরিমাণ\n৩. মেথড (Bkash/Nagad) লিখুন", parse_mode: "HTML" });
           else if (text === CMD_GAMEID) await api("sendMessage", { chat_id: chatId, text: "👣 <b>গেম আইডি সমস্যা?</b>\n\nসঠিক আইডি এবং স্ক্রিনশট দিন।", parse_mode: "HTML" });
 
-          // ALBUM HANDLING (FIXED)
+          // ALBUM HANDLING (টাইম ৩ সেকেন্ড করা হয়েছে)
           if (msg.media_group_id) {
               const groupId = msg.media_group_id;
               if (!albumBucket[groupId]) {
                   albumBucket[groupId] = {
                       messages: [],
-                      timer: setTimeout(() => sendAlbumGroup(groupId, chatId, name), 2000)
+                      // ⚠️ এখানে ৩০০০ করা হয়েছে যাতে ক্যাপশন মিস না হয়
+                      timer: setTimeout(() => sendAlbumGroup(groupId, chatId, name), 3000)
                   };
               }
               albumBucket[groupId].messages.push(msg);
