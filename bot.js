@@ -39,17 +39,6 @@ async function api(method, data) {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-// HTML সিম্বল ফিক্স করার ফাংশন
-function escapeHtml(text) {
-    if (!text) return text;
-    return text
-        .replace(/&/g, "&amp;")
-        .replace(/</g, "&lt;")
-        .replace(/>/g, "&gt;")
-        .replace(/"/g, "&quot;")
-        .replace(/'/g, "&#039;");
-}
-
 // ==============================
 // ✅ মেনু বাটন
 // ==============================
@@ -67,49 +56,43 @@ const mainKeyboard = {
     one_time_keyboard: false
 };
 
-// --- অ্যালবাম পাঠানোর মেইন ফাংশন ---
+// --- অ্যালবাম পাঠানোর ফাংশন ---
 async function sendAlbumGroup(groupId, chatId, name) {
     const messages = albumBucket[groupId].messages;
     delete albumBucket[groupId]; 
 
     if (!messages || messages.length === 0) return;
 
-    // ১. সব মেসেজ ঘেঁটে ক্যাপশন বের করা
-    // (যে ছবিতেই ক্যাপশন থাকুক, আমরা সেটা খুঁজে বের করবই)
+    // ১. কাস্টমারের আসল ক্যাপশন খুঁজে বের করা
     const msgWithCaption = messages.find(m => m.caption);
-    const userCaption = msgWithCaption ? msgWithCaption.caption : "";
+    const originalCaption = msgWithCaption ? msgWithCaption.caption : "";
 
-    // ২. মিডিয়া অ্যারে সাজানো
+    // ২. মিডিয়া সাজানো (আমরা ক্যাপশনে হাত দেব না, শুধু কপি করব)
     const mediaArray = messages.map((msg, index) => {
-        let finalCaption = "";
-        
-        // অ্যাডমিন ট্যাগ (নাম ও আইডি)
-        const adminTag = `👤 <b>${name}</b>\n🆔 #UID${chatId}`;
-
-        // শুধুমাত্র ১ম ছবিতে ক্যাপশন বসাবো
-        if (index === 0) {
-            if (userCaption) {
-                // যদি কাস্টমারের লেখা থাকে
-                finalCaption = `📝 ${escapeHtml(userCaption)}\n\n${adminTag}`;
-            } else {
-                // লেখা না থাকলে শুধু নাম
-                finalCaption = adminTag;
-            }
-        } else {
-            // বাকি ছবিতে শুধু নাম
-            finalCaption = adminTag;
+        let caption = "";
+        // শুধু প্রথম ছবিতে কাস্টমারের ক্যাপশন দেব (যদি থাকে)
+        if (index === 0 && originalCaption) {
+            caption = originalCaption;
         }
-        
+
         if (msg.photo) {
-            return { type: 'photo', media: msg.photo[msg.photo.length - 1].file_id, caption: finalCaption, parse_mode: 'HTML' };
+            return { type: 'photo', media: msg.photo[msg.photo.length - 1].file_id, caption: caption };
         } else if (msg.video) {
-            return { type: 'video', media: msg.video.file_id, caption: finalCaption, parse_mode: 'HTML' };
+            return { type: 'video', media: msg.video.file_id, caption: caption };
         }
         return null;
     }).filter(m => m !== null);
 
+    // ৩. অ্যালবাম পাঠানো
     if (mediaArray.length > 0) {
         await api("sendMediaGroup", { chat_id: MAIN_GROUP_ID, media: mediaArray });
+        
+        // ৪. নাম এবং আইডি আলাদা মেসেজে পাঠানো (যাতে রিপ্লাই দেওয়া যায়)
+        await api("sendMessage", { 
+            chat_id: MAIN_GROUP_ID, 
+            text: `👤 <b>${name}</b> sent these photos 👆\n🆔 #UID${chatId}`, 
+            parse_mode: "HTML" 
+        });
     }
 }
 
@@ -191,37 +174,41 @@ async function poll() {
           else if (text === CMD_WITHDRAW) await api("sendMessage", { chat_id: chatId, text: "💰 <b>উইথড্র সমস্যা?</b>\n\n১. গেম আইডি\n২. টাকার পরিমাণ\n৩. মেথড (Bkash/Nagad) লিখুন", parse_mode: "HTML" });
           else if (text === CMD_GAMEID) await api("sendMessage", { chat_id: chatId, text: "👣 <b>গেম আইডি সমস্যা?</b>\n\nসঠিক আইডি এবং স্ক্রিনশট দিন।", parse_mode: "HTML" });
 
-          // ALBUM HANDLING (টাইম ৩ সেকেন্ড করা হয়েছে)
+          // ALBUM HANDLING
           if (msg.media_group_id) {
               const groupId = msg.media_group_id;
               if (!albumBucket[groupId]) {
                   albumBucket[groupId] = {
                       messages: [],
-                      // ⚠️ এখানে ৩০০০ করা হয়েছে যাতে ক্যাপশন মিস না হয়
-                      timer: setTimeout(() => sendAlbumGroup(groupId, chatId, name), 3000)
+                      timer: setTimeout(() => sendAlbumGroup(groupId, chatId, name), 2500)
                   };
               }
               albumBucket[groupId].messages.push(msg);
               continue;
           }
 
-          // SINGLE MESSAGE
-          const userLink = `<a href="tg://user?id=${chatId}">${name}</a>`;
-          const idTag = `🆔 #UID${chatId}`;
-
+          // SINGLE MESSAGE (Simple Forward Style)
+          
+          // ১. টেক্সট মেসেজ
           if (text && !msg.photo && !msg.video && !msg.voice && !msg.document) {
-              const prettyMsg = `👤 <b>${userLink}</b>\n\n${escapeHtml(text)}\n\n${idTag}`;
+              const prettyMsg = `👤 <b>${name}</b>:\n${text}\n\n🆔 #UID${chatId}`;
               await api("sendMessage", { chat_id: MAIN_GROUP_ID, text: prettyMsg, parse_mode: "HTML", disable_web_page_preview: true });
           } 
-          else if (msg.photo || msg.video || msg.document) {
-              const userCaption = msg.caption ? `📝 ${escapeHtml(msg.caption)}\n\n` : "";
-              const mediaCaption = userCaption + `👤 <b>${userLink}</b>\n${idTag}`;
-              
-              await api("copyMessage", { chat_id: MAIN_GROUP_ID, from_chat_id: chatId, message_id: msg.message_id, caption: mediaCaption, parse_mode: "HTML" });
-          }
+          // ২. ছবি / ভিডিও / ডকুমেন্ট / ভয়েস
           else {
-              await api("copyMessage", { chat_id: MAIN_GROUP_ID, from_chat_id: chatId, message_id: msg.message_id });
-              await api("sendMessage", { chat_id: MAIN_GROUP_ID, text: `👤 <b>${userLink}</b> 👆 sent media\n${idTag}`, parse_mode: "HTML" });
+              // ক) আগে আসল মেসেজটা কপি করে পাঠাও (ক্যাপশন সহ)
+              await api("copyMessage", { 
+                  chat_id: MAIN_GROUP_ID, 
+                  from_chat_id: chatId, 
+                  message_id: msg.message_id 
+              });
+
+              // খ) এরপর আলাদা মেসেজে নাম আর আইডি পাঠাও (রিপ্লাই করার জন্য)
+              await api("sendMessage", { 
+                  chat_id: MAIN_GROUP_ID, 
+                  text: `👤 <b>${name}</b> sent this 👆\n🆔 #UID${chatId}`, 
+                  parse_mode: "HTML" 
+              });
           }
           continue;
         }
