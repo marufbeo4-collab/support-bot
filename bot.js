@@ -7,8 +7,7 @@ if (!TOKEN) {
 
 const API = `https://api.telegram.org/bot${TOKEN}`;
 
-// ⚠️ আপনার গ্রুপের আইডি এখানে বসান (Render এ ২৪ ঘণ্টা রানিং রাখার জন্য এটা জরুরি)
-// উদাহরণ: const MAIN_GROUP_ID = -100123456789;
+// ✅ আপনার আইডি আমি বসিয়ে দিয়েছি, এখানে আর হাত দেবেন না।
 const MAIN_GROUP_ID = -1003535404975; 
 
 const userList = new Set(); 
@@ -41,11 +40,11 @@ async function api(method, data) {
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // ==========================================
-// ✅ UPDATED BUTTON COMMANDS (SIMPLE)
+// ✅ SIMPLE MENU COMMANDS
 // ==========================================
-const CMD_DEPOSIT = "DEPOSIT • PROBLEM";
-const CMD_WITHDRAW = "WITHDRAW • PROBLEM";
-const CMD_GAMEID = "GAME ID PROBLEM";
+const CMD_DEPOSIT = "DEPOSIT • PROBLEM 💳";
+const CMD_WITHDRAW = "WITHDRAW • PROBLEM 💰";
+const CMD_GAMEID = "GAME ID PROBLEM 👣";
 const CMD_OTHERS = "OTHERS ℹ️";
 
 const mainKeyboard = {
@@ -92,26 +91,25 @@ async function poll() {
                 activeGroupId = chatId;
                 await api("sendMessage", {
                     chat_id: chatId,
-                    text: `<b>💎 Super Club Support Connected!</b>\n\n🆔 Group ID: <code>${chatId}</code>\n(⚠️ এই আইডি কপি করে কোডের ১০ নম্বর লাইনে বসান)`,
+                    text: `<b>💎 Connected!</b>\nID: <code>${chatId}</code>`,
                     parse_mode: "HTML"
                 });
                 continue;
             }
-            
             // Broadcast
             if (text.startsWith("/broadcast")) {
                 const noticeText = text.replace("/broadcast", "").trim();
                 if (!noticeText) continue;
-                await api("sendMessage", { chat_id: chatId, text: `📢 Sending notice to ${userList.size} users...` });
+                await api("sendMessage", { chat_id: chatId, text: `📢 Sending...` });
                 for (const userId of userList) {
                     await api("sendMessage", {
                         chat_id: userId,
-                        text: `📢 <b>OFFICIAL NOTICE</b>\n━━━━━━━━━━━━━━━━\n\n${noticeText}\n\n━━━━━━━━━━━━━━━━\n<i>Authorized by Super Club Admin</i>`,
+                        text: `📢 <b>NOTICE</b>\n\n${noticeText}`,
                         parse_mode: "HTML"
                     });
                     await sleep(50);
                 }
-                await api("sendMessage", { chat_id: chatId, text: "✅ Broadcast Complete." });
+                await api("sendMessage", { chat_id: chatId, text: "✅ Done." });
                 continue;
             }
         }
@@ -129,7 +127,7 @@ async function poll() {
 প্রিয় ${name},
 আমাদের প্রিমিয়াম সাপোর্টে আপনাকে স্বাগতম।
 
-নিচের মেনু থেকে আপনার সমস্যার বিষয়টি সিলেক্ট করুন। আমাদের দক্ষ এজেন্টরা ২৪/৭ আপনার সেবায় নিয়োজিত। ❤️
+নিচের মেনু থেকে আপনার সমস্যার বিষয়টি সিলেক্ট করুন। ❤️
 
 <i>Choose an option below:</i>
             `;
@@ -142,15 +140,19 @@ async function poll() {
             continue;
           }
 
+          // Maintenance Check
           if (!activeGroupId) {
-            await api("sendMessage", { chat_id: chatId, text: "⚠️ <i>System Maintenance Mode.</i>", parse_mode: "HTML" });
+            await api("sendMessage", { 
+                chat_id: chatId, 
+                text: "⚠️ <i>System Maintenance Mode.</i>", 
+                parse_mode: "HTML" 
+            });
             continue;
           }
 
           // --- AUTO REPLY LOGIC ---
           let isButton = false;
           
-          // 1. DEPOSIT
           if (text === CMD_DEPOSIT) {
               isButton = true;
               await api("sendMessage", {
@@ -159,7 +161,6 @@ async function poll() {
                   parse_mode: "HTML"
               });
           } 
-          // 2. WITHDRAW
           else if (text === CMD_WITHDRAW) {
               isButton = true;
               await api("sendMessage", {
@@ -168,7 +169,6 @@ async function poll() {
                   parse_mode: "HTML"
               });
           }
-          // 3. GAME ID
           else if (text === CMD_GAMEID) {
               isButton = true;
               await api("sendMessage", {
@@ -177,7 +177,6 @@ async function poll() {
                   parse_mode: "HTML"
               });
           }
-          // 4. OTHERS
           else if (text === CMD_OTHERS) {
               isButton = true;
               await api("sendMessage", {
