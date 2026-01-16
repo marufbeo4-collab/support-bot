@@ -37,7 +37,7 @@ async function api(method, data) {
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // ==============================
-// ✅ মেনু বাটন (সব আগের মতোই আছে)
+// ✅ মেনু বাটন (সব ফিচার আছে)
 // ==============================
 const CMD_DEPOSIT = "DEPOSIT • PROBLEM 💳";
 const CMD_WITHDRAW = "WITHDRAW • PROBLEM 💰";
@@ -77,21 +77,17 @@ async function poll() {
         const text = msg.text || msg.caption || ""; 
         const name = msg.from.first_name || "Member";
 
-        // গ্রুপ কমান্ড হ্যান্ডলার (সেটআপ ও ব্রডকাস্ট)
+        // গ্রুপ কমান্ড হ্যান্ডলার (সেটআপ)
         if (msg.chat.type === "group" || msg.chat.type === "supergroup") {
             if (text === "/setgroup") {
                 activeGroupId = chatId;
-                await api("sendMessage", { chat_id: chatId, text: `✅ <b>Connected!</b> ID: <code>${chatId}</code>`, parse_mode: "HTML" });
-            }
-            if (text.startsWith("/broadcast")) {
-                // ব্রডকাস্ট কোড এখানে (শর্টকার্ট)
-                await api("sendMessage", { chat_id: chatId, text: "📢 Broadcast started..." });
+                await api("sendMessage", { chat_id: chatId, text: `✅ <b>Connected!</b>`, parse_mode: "HTML" });
             }
             continue;
         }
 
         // ==============================
-        // 👤 ইউজার সাইড (Auto Reply + Forwarding)
+        // 👤 ইউজার সাইড (Auto Reply + Forward)
         // ==============================
         if (msg.chat.type === "private") {
           
@@ -105,7 +101,7 @@ async function poll() {
             continue;
           }
 
-          // --- ১. অটো রিপ্লাই (আগের ফিচার ফেরত) ---
+          // --- ১. অটো রিপ্লাই (ফিচার) ---
           if (text === CMD_DEPOSIT) {
               await api("sendMessage", { chat_id: chatId, text: "💳 <b>ডিপোজিট সমস্যা?</b>\n\n১. গেম আইডি\n২. TrxID\n৩. স্ক্রিনশট দিন", parse_mode: "HTML" });
           } 
@@ -117,24 +113,29 @@ async function poll() {
           }
 
           // ==============================
-          // 📢 ২. গ্রুপে ফরওয়ার্ড (একদম সিম্পল স্টাইল)
+          // 📢 ২. গ্রুপে সুন্দর ফরম্যাটে ফরওয়ার্ড
           // ==============================
+          
+          // ইউজারের নামের লিংক তৈরি (যাতে নামের ওপর ক্লিক করলে প্রোফাইল আসে)
+          const userLink = `<a href="tg://user?id=${chatId}">${name}</a>`;
           
           // ক) যদি শুধু লেখা (Text) হয়
           if (text && !msg.photo && !msg.video && !msg.voice && !msg.sticker) {
-              // মেসেজটা দেখতে হবে: "👤 Maruf: আমার সমস্যা (#UID...)"
-              const simpleText = `👤 <b>${name}:</b> ${text}\n\n#UID${chatId}`;
+              // ডিজাইন:
+              // 👤 Maruf
+              // মেসেজ...
+              const prettyMsg = `👤 <b>${userLink}</b>\n${text}\n\n<tg-spoiler>#UID${chatId}</tg-spoiler>`;
               
               await api("sendMessage", {
                   chat_id: activeGroupId,
-                  text: simpleText,
+                  text: prettyMsg,
                   parse_mode: "HTML"
               });
           } 
           // খ) যদি ছবি বা ভিডিও হয় (Media)
           else if (msg.photo || msg.video || msg.document) {
-              // ছবির সাথেই নাম আর আইডি লাগিয়ে দেব (আলাদা মেসেজ আসবে না)
-              const mediaCaption = (msg.caption || "") + `\n\n👤 <b>${name}</b> | #UID${chatId}`;
+              // ছবির ক্যাপশনে নাম থাকবে
+              const mediaCaption = (msg.caption || "") + `\n\n👤 <b>${userLink}</b>\n#UID${chatId}`;
               
               await api("copyMessage", {
                   chat_id: activeGroupId,
@@ -146,16 +147,16 @@ async function poll() {
           }
           // গ) যদি ভয়েস বা স্টিকার হয়
           else {
-              // ভয়েস কপি করব
+              // ভয়েস কপি
               await api("copyMessage", {
                   chat_id: activeGroupId,
                   from_chat_id: chatId,
                   message_id: msg.message_id
               });
-              // রিপ্লাই দেওয়ার জন্য নিচে ছোট্ট করে আইডি দেব
+              // রিপ্লাই ট্যাগ
               await api("sendMessage", {
                   chat_id: activeGroupId,
-                  text: `👤 <b>${name}</b> sent media | #UID${chatId}`,
+                  text: `👤 <b>${userLink}</b> sent a media 👆\n#UID${chatId}`,
                   parse_mode: "HTML"
               });
           }
@@ -171,8 +172,6 @@ async function poll() {
 
            if (match) {
              const userId = match[1];
-             
-             // ইউজারের কাছে হুবহু কপি যাবে
              await api("copyMessage", {
                  chat_id: userId,
                  from_chat_id: chatId,
