@@ -21,7 +21,6 @@ server.listen(process.env.PORT || 8080);
 
 console.log("🚀 Bot Started...");
 
-// অ্যালবাম জমা রাখার বাকেট
 const albumBucket = {}; 
 
 async function api(method, data) {
@@ -56,7 +55,6 @@ const mainKeyboard = {
     one_time_keyboard: false
 };
 
-// --- অ্যালবাম পাঠানোর ফাংশন ---
 async function sendAlbumGroup(groupId, chatId, name) {
     const messages = albumBucket[groupId].messages;
     delete albumBucket[groupId]; 
@@ -64,8 +62,7 @@ async function sendAlbumGroup(groupId, chatId, name) {
     if (!messages || messages.length === 0) return;
 
     const mediaArray = messages.map(msg => {
-        // এই ফরমেটটি রিপ্লাই এর জন্য জরুরি
-        const caption = `👤 <b>${name}</b>\n(Album Media)\n🆔 #UID${chatId}`;
+        const caption = `👤 <b>${name}</b>\n🆔 #UID${chatId}`;
         
         if (msg.photo) {
             return { type: 'photo', media: msg.photo[msg.photo.length - 1].file_id, caption: caption, parse_mode: 'HTML' };
@@ -82,7 +79,6 @@ async function sendAlbumGroup(groupId, chatId, name) {
 
 async function poll() {
   let offset = 0;
-  let activeGroupId = MAIN_GROUP_ID;
 
   while (true) {
     try {
@@ -104,16 +100,68 @@ async function poll() {
         const text = msg.text || msg.caption || ""; 
         const name = msg.from.first_name || "Member";
 
-        // গ্রুপ কমান্ড
+        // ==============================
+        // 🏢 GROUP SIDE (Admin)
+        // ==============================
         if (msg.chat.type === "group" || msg.chat.type === "supergroup") {
-            if (text === "/setgroup") {
-                await api("sendMessage", { chat_id: chatId, text: `✅ <b>Connected!</b>`, parse_mode: "HTML" });
+            
+            // 🔍 গ্রুপ আইডি চেক করার কমান্ড
+            if (text === "/id") {
+                await api("sendMessage", { 
+                    chat_id: chatId, 
+                    text: `🆔 <b>Current Group ID:</b> <code>${chatId}</code>\n⚙️ <b>Configured ID:</b> <code>${MAIN_GROUP_ID}</code>\n\n(দুইটা আইডি একই হতে হবে)`, 
+                    parse_mode: "HTML" 
+                });
+                continue;
+            }
+
+            // 👨‍💻 রিপ্লাই সিস্টেম (Reply System)
+            if (chatId === MAIN_GROUP_ID && msg.reply_to_message) {
+                
+                // ১. আসল মেসেজ বের করা
+                let originalText = msg.reply_to_message.text || msg.reply_to_message.caption || "";
+                
+                // ২. UID খোঁজা
+                const match = originalText.match(/#UID(\d+)/);
+
+                if (match) {
+                    const userId = match[1];
+                    
+                    // ৩. ইউজারের কাছে পাঠানো
+                    const sent = await api("copyMessage", {
+                        chat_id: userId,
+                        from_chat_id: chatId,
+                        message_id: msg.message_id
+                    });
+
+                    // ৪. সফল হলে রিয়েকশন, ব্যর্থ হলে এরর মেসেজ
+                    if (sent && sent.ok) {
+                        await api("setMessageReaction", {
+                            chat_id: chatId,
+                            message_id: msg.message_id,
+                            reaction: [{ type: "emoji", emoji: "⚡" }]
+                        });
+                    } else {
+                        await api("sendMessage", { 
+                            chat_id: chatId, 
+                            text: `❌ <b>Failed!</b> User blocked the bot.`, 
+                            parse_mode: "HTML" 
+                        });
+                    }
+                } else {
+                    // যদি UID না পায়
+                    await api("sendMessage", { 
+                        chat_id: chatId, 
+                        text: `⚠️ <b>Error:</b> ID not found!\nMake sure replying to a message with <b>#UID...</b>`, 
+                        parse_mode: "HTML" 
+                    });
+                }
             }
             continue;
         }
 
         // ==============================
-        // 👤 ইউজার সাইড (Auto Reply + Forward)
+        // 👤 USER SIDE
         // ==============================
         if (msg.chat.type === "private") {
           
@@ -127,13 +175,11 @@ async function poll() {
             continue;
           }
 
-          // অটো রিপ্লাই
           if (text === CMD_DEPOSIT) await api("sendMessage", { chat_id: chatId, text: "💳 <b>ডিপোজিট সমস্যা?</b>\n\n১. গেম আইডি\n২. TrxID\n৩. স্ক্রিনশট দিন", parse_mode: "HTML" });
           else if (text === CMD_WITHDRAW) await api("sendMessage", { chat_id: chatId, text: "💰 <b>উইথড্র সমস্যা?</b>\n\n১. গেম আইডি\n২. টাকার পরিমাণ\n৩. মেথড (Bkash/Nagad) লিখুন", parse_mode: "HTML" });
           else if (text === CMD_GAMEID) await api("sendMessage", { chat_id: chatId, text: "👣 <b>গেম আইডি সমস্যা?</b>\n\nসঠিক আইডি এবং স্ক্রিনশট দিন।", parse_mode: "HTML" });
 
-
-          // --- ALBUM LOGIC ---
+          // ALBUM HANDLING
           if (msg.media_group_id) {
               const groupId = msg.media_group_id;
               if (!albumBucket[groupId]) {
@@ -146,87 +192,24 @@ async function poll() {
               continue;
           }
 
-          // --- SINGLE MESSAGE FORWARDING ---
-          
-          // ইউজারের নামের লিংক
+          // SINGLE MESSAGE
           const userLink = `<a href="tg://user?id=${chatId}">${name}</a>`;
-          // ⚠️ এই লাইনটি খেয়াল করুন: ID এখন পরিষ্কারভাবে নিচে থাকবে
+          // 🆔 পরিষ্কারভাবে আলাদা লাইনে রাখা হলো
           const idTag = `🆔 #UID${chatId}`;
 
-          // ১. টেক্সট মেসেজ
           if (text && !msg.photo && !msg.video && !msg.voice && !msg.document) {
               const prettyMsg = `👤 <b>${userLink}</b>\n\n${text}\n\n${idTag}`;
-              
-              await api("sendMessage", {
-                  chat_id: activeGroupId,
-                  text: prettyMsg,
-                  parse_mode: "HTML",
-                  disable_web_page_preview: true
-              });
+              await api("sendMessage", { chat_id: MAIN_GROUP_ID, text: prettyMsg, parse_mode: "HTML", disable_web_page_preview: true });
           } 
-          // ২. ছবি / ভিডিও / ডকুমেন্ট
           else if (msg.photo || msg.video || msg.document) {
               const mediaCaption = (msg.caption || "") + `\n\n👤 <b>${userLink}</b>\n${idTag}`;
-              await api("copyMessage", {
-                  chat_id: activeGroupId,
-                  from_chat_id: chatId,
-                  message_id: msg.message_id,
-                  caption: mediaCaption,
-                  parse_mode: "HTML"
-              });
+              await api("copyMessage", { chat_id: MAIN_GROUP_ID, from_chat_id: chatId, message_id: msg.message_id, caption: mediaCaption, parse_mode: "HTML" });
           }
-          // ৩. ভয়েস / স্টিকার (আলাদা ট্যাগ সহ)
           else {
-              await api("copyMessage", { chat_id: activeGroupId, from_chat_id: chatId, message_id: msg.message_id });
-              await api("sendMessage", { 
-                  chat_id: activeGroupId, 
-                  text: `👤 <b>${userLink}</b> 👆 sent media\n${idTag}`, 
-                  parse_mode: "HTML" 
-              });
+              await api("copyMessage", { chat_id: MAIN_GROUP_ID, from_chat_id: chatId, message_id: msg.message_id });
+              await api("sendMessage", { chat_id: MAIN_GROUP_ID, text: `👤 <b>${userLink}</b> 👆 sent media\n${idTag}`, parse_mode: "HTML" });
           }
           continue;
-        }
-
-        // ==============================
-        // 👨‍💻 অ্যাডমিন রিপ্লাই (FIXED & DEBUGGED)
-        // ==============================
-        if (activeGroupId && chatId === activeGroupId && msg.reply_to_message) {
-           // আসল মেসেজ বা ক্যাপশন বের করা
-           let originalText = msg.reply_to_message.text || msg.reply_to_message.caption || "";
-           
-           // আইডি খোঁজা (Regex: #UID এর পর সংখ্যা)
-           const match = originalText.match(/#UID(\d+)/);
-
-           if (match) {
-             const userId = match[1];
-             
-             // কপি মেসেজ (যাতে ছবি/স্টিকার/টেক্সট সব রিপ্লাই হিসেবে যায়)
-             const sent = await api("copyMessage", {
-                 chat_id: userId,
-                 from_chat_id: chatId,
-                 message_id: msg.message_id
-             });
-
-             // যদি কপি করতে না পারে (যেমন ইউজার বট ব্লক করলে)
-             if (!sent || !sent.ok) {
-                 await api("sendMessage", { chat_id: activeGroupId, text: `❌ <b>Failed!</b> User blocked bot or error.`, parse_mode: "HTML" });
-             } else {
-                 // সফল হলে টিক চিহ্ন
-                 await api("setMessageReaction", {
-                     chat_id: chatId,
-                     message_id: msg.message_id,
-                     reaction: [{ type: "emoji", emoji: "⚡" }]
-                 });
-             }
-
-           } else {
-             // ⚠️ যদি আইডি না পায়, তাহলে গ্রুপে জানাবে
-             await api("sendMessage", { 
-                 chat_id: activeGroupId, 
-                 text: `⚠️ <b>Error:</b> User ID not found in the message you replied to.\nMake sure you are replying to a message containing <b>#UID...</b>`, 
-                 parse_mode: "HTML" 
-             });
-           }
         }
       }
     } catch (err) {
