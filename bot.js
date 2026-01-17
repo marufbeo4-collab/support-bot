@@ -67,7 +67,7 @@ const mainKeyboard = {
 };
 
 // --- অ্যালবাম পাঠানোর ফাংশন ---
-async function sendAlbumGroup(groupId, chatId, firstName, username, firstMsgId) {
+async function sendAlbumGroup(groupId, chatId, firstName, username, firstMsgId, replyContext) {
     const messages = albumBucket[groupId].messages;
     delete albumBucket[groupId]; 
 
@@ -92,10 +92,11 @@ async function sendAlbumGroup(groupId, chatId, firstName, username, firstMsgId) 
         const fullName = escapeHtml(`${firstName} ${userHandle}`);
         const userLink = `<a href="tg://user?id=${chatId}">${fullName}</a>`;
 
-        // 🔥 ম্যাজিক আইডি: UserID এবং MessageID একসাথে রাখা হচ্ছে
+        // ম্যাজিক আইডি (ন্যাচারাল রিপ্লাইয়ের জন্য)
         const magicId = `#ID${chatId}_${firstMsgId}`;
 
-        const finalMsg = `👤 <b>${userLink}</b> sent photos 👆\n🆔 <code>${magicId}</code>`;
+        // ✅ এখানে replyContext যোগ করা হলো
+        const finalMsg = `👤 <b>${userLink}</b> sent photos 👆${replyContext}\n🆔 <code>${magicId}</code>`;
 
         await api("sendMessage", { 
             chat_id: MAIN_GROUP_ID, 
@@ -138,25 +139,23 @@ async function poll() {
                 continue;
             }
 
-            // 🔥 NATURAL REPLY LOGIC 🔥
+            // ন্যাচারাল রিপ্লাই হ্যান্ডলার
             if (chatId === MAIN_GROUP_ID && msg.reply_to_message) {
-                // ১. গ্রুপ মেসেজ থেকে ম্যাজিক আইডি (#ID123_456) খুঁজে বের করা
                 let originalText = msg.reply_to_message.text || msg.reply_to_message.caption || "";
                 
-                // Regex দিয়ে UserID এবং MessageID আলাদা করা
+                // ম্যাজিক আইডি ডিকোড করা (#ID123_456)
                 const match = originalText.match(/#ID(\d+)_(\d+)/);
 
                 if (match) {
-                    const userId = match[1];     // ইউজারের চ্যাট আইডি
-                    const userMsgId = match[2];  // ইউজারের আসল মেসেজ আইডি
+                    const userId = match[1];     
+                    const userMsgId = match[2];  
 
-                    // ২. এডমিনের মেসেজ কাস্টমারের কাছে পাঠানো (Copy)
-                    // এবং 'reply_to_message_id' ব্যবহার করে ন্যাচারাল রিপ্লাই দেওয়া
+                    // ন্যাচারাল রিপ্লাই পাঠানো
                     const sent = await api("copyMessage", {
                         chat_id: userId,
                         from_chat_id: chatId,
                         message_id: msg.message_id,
-                        reply_to_message_id: userMsgId // ✅ এটাই আসল ম্যাজিক!
+                        reply_to_message_id: userMsgId 
                     });
 
                     if (sent && sent.ok) {
@@ -193,14 +192,29 @@ async function poll() {
           else if (text === CMD_GAMEID) await api("sendMessage", { chat_id: chatId, text: "👣 <b>গেম আইডি সমস্যা?</b>\n\nসঠিক আইডি এবং স্ক্রিনশট দিন।", parse_mode: "HTML" });
 
 
+          // 🔥 FEATURE: REPLY CONTEXT RESTORED 🔥
+          // কাস্টমার যদি রিপ্লাই দেয়, আমরা সেটা গ্রুপে দেখাব
+          let replyContext = "";
+          
+          if (msg.reply_to_message) {
+              let rText = msg.reply_to_message.text || msg.reply_to_message.caption || "🖼️ Media/Sticker";
+              
+              // টেক্সট ছোট করা
+              if (rText.length > 25) rText = rText.substring(0, 25) + "...";
+              
+              // এই টেক্সটটা গ্রুপে যাবে
+              replyContext = `\n↩️ <b>Replying to:</b> <i>"${escapeHtml(rText)}"</i>`;
+          }
+
+
           // ALBUM HANDLING
           if (msg.media_group_id) {
               const groupId = msg.media_group_id;
               if (!albumBucket[groupId]) {
                   albumBucket[groupId] = {
                       messages: [],
-                      // এখানে প্রথম মেসেজের আইডি পাঠাচ্ছি যাতে রিপ্লাই দেওয়া যায়
-                      timer: setTimeout(() => sendAlbumGroup(groupId, chatId, firstName, username, msg.message_id), 2500)
+                      // replyContext পাঠানো হচ্ছে
+                      timer: setTimeout(() => sendAlbumGroup(groupId, chatId, firstName, username, msg.message_id, replyContext), 2500)
                   };
               }
               albumBucket[groupId].messages.push(msg);
@@ -212,13 +226,12 @@ async function poll() {
           const fullName = escapeHtml(`${firstName} ${userHandle}`);
           const userLink = `<a href="tg://user?id=${chatId}">${fullName}</a>`;
 
-          // 🔥 ম্যাজিক আইডি জেনারেট করা (UserID + MessageID)
-          // এটা গ্রুপে দেখা যাবে, কিন্তু এটাই আমাদের ডাটাবেসের কাজ করবে
           const magicId = `#ID${chatId}_${msg.message_id}`;
 
           // ১. টেক্সট
           if (text && !msg.photo && !msg.video && !msg.voice && !msg.document) {
-              const prettyMsg = `👤 <b>${userLink}</b>:\n\n${escapeHtml(text)}\n\n🆔 <code>${magicId}</code>`;
+              // ✅ replyContext এখানে যুক্ত করা হয়েছে
+              const prettyMsg = `👤 <b>${userLink}</b>:${replyContext}\n\n${escapeHtml(text)}\n\n🆔 <code>${magicId}</code>`;
               await api("sendMessage", { chat_id: MAIN_GROUP_ID, text: prettyMsg, parse_mode: "HTML", disable_web_page_preview: true });
           } 
           // ২. মিডিয়া
@@ -229,9 +242,10 @@ async function poll() {
                   message_id: msg.message_id 
               });
 
+              // ✅ replyContext এখানেও যুক্ত করা হয়েছে
               await api("sendMessage", { 
                   chat_id: MAIN_GROUP_ID, 
-                  text: `👤 <b>${userLink}</b> sent this 👆\n🆔 <code>${magicId}</code>`, 
+                  text: `👤 <b>${userLink}</b> sent this 👆${replyContext}\n🆔 <code>${magicId}</code>`, 
                   parse_mode: "HTML" 
               });
           }
