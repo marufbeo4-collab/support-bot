@@ -39,7 +39,7 @@ async function api(method, data) {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-// নাম বা লেখায় যদি < > থাকে, সেটা ঠিক করার জন্য
+// HTML ক্যারেক্টার ফিক্সার
 function escapeHtml(text) {
     if (!text) return text;
     return text
@@ -68,7 +68,7 @@ const mainKeyboard = {
 };
 
 // --- অ্যালবাম পাঠানোর ফাংশন ---
-async function sendAlbumGroup(groupId, chatId, firstName, username) {
+async function sendAlbumGroup(groupId, chatId, firstName, username, replyContext) {
     const messages = albumBucket[groupId].messages;
     delete albumBucket[groupId]; 
 
@@ -82,7 +82,7 @@ async function sendAlbumGroup(groupId, chatId, firstName, username) {
     const mediaArray = messages.map((msg, index) => {
         let caption = "";
         if (index === 0 && originalCaption) {
-            caption = originalCaption; // শুধু ১ম ছবিতে ক্যাপশন থাকবে
+            caption = originalCaption; 
         }
 
         if (msg.photo) {
@@ -97,14 +97,17 @@ async function sendAlbumGroup(groupId, chatId, firstName, username) {
     if (mediaArray.length > 0) {
         await api("sendMediaGroup", { chat_id: MAIN_GROUP_ID, media: mediaArray });
         
-        // ৪. নাম ও ইউজারনেমসহ আলাদা নোটিফিকেশন
+        // ৪. নাম + রিপ্লাই ইনফো সহ নোটিফিকেশন
         const userHandle = username ? `(@${username})` : "";
         const fullName = escapeHtml(`${firstName} ${userHandle}`);
         const userLink = `<a href="tg://user?id=${chatId}">${fullName}</a>`;
 
+        // রিপ্লাই কনটেক্সট যুক্ত করা হলো
+        const finalMsg = `👤 <b>${userLink}</b> sent these photos 👆${replyContext}\n🆔 #UID${chatId}`;
+
         await api("sendMessage", { 
             chat_id: MAIN_GROUP_ID, 
-            text: `👤 <b>${userLink}</b> sent these photos 👆\n🆔 #UID${chatId}`, 
+            text: finalMsg, 
             parse_mode: "HTML" 
         });
     }
@@ -132,9 +135,8 @@ async function poll() {
         const chatId = msg.chat.id;
         const text = msg.text || msg.caption || ""; 
         
-        // নাম এবং ইউজারনেম বের করা
         const firstName = msg.from.first_name || "Member";
-        const username = msg.from.username || ""; // @username (যদি থাকে)
+        const username = msg.from.username || ""; 
 
         // ==============================
         // 🏢 GROUP SIDE
@@ -190,13 +192,27 @@ async function poll() {
           else if (text === CMD_WITHDRAW) await api("sendMessage", { chat_id: chatId, text: "💰 <b>উইথড্র সমস্যা?</b>\n\n১. গেম আইডি\n২. টাকার পরিমাণ\n৩. মেথড (Bkash/Nagad) লিখুন", parse_mode: "HTML" });
           else if (text === CMD_GAMEID) await api("sendMessage", { chat_id: chatId, text: "👣 <b>গেম আইডি সমস্যা?</b>\n\nসঠিক আইডি এবং স্ক্রিনশট দিন।", parse_mode: "HTML" });
 
+
+          // 🔥 REPLY CONTEXT DETECTOR 🔥
+          // কাস্টমার কার মেসেজের রিপ্লাই দিচ্ছে তা বের করা
+          let replyContext = "";
+          if (msg.reply_to_message) {
+              // যার উত্তরে রিপ্লাই দিচ্ছে তার টেক্সট বা ক্যাপশন নেওয়া
+              let rText = msg.reply_to_message.text || msg.reply_to_message.caption || "🖼️ Sent Media";
+              // লেখা বেশি বড় হলে ছোট করে দেখানো (২৫ অক্ষরের বেশি হলে ...)
+              if (rText.length > 25) rText = rText.substring(0, 25) + "...";
+              
+              replyContext = `\n↩️ <b>Replying to:</b> <i>"${escapeHtml(rText)}"</i>`;
+          }
+
+
           // ALBUM HANDLING
           if (msg.media_group_id) {
               const groupId = msg.media_group_id;
               if (!albumBucket[groupId]) {
                   albumBucket[groupId] = {
                       messages: [],
-                      timer: setTimeout(() => sendAlbumGroup(groupId, chatId, firstName, username), 2500)
+                      timer: setTimeout(() => sendAlbumGroup(groupId, chatId, firstName, username, replyContext), 2500)
                   };
               }
               albumBucket[groupId].messages.push(msg);
@@ -204,30 +220,29 @@ async function poll() {
           }
 
           // SINGLE MESSAGE LOGIC
-          
-          // ইউজার লিংক তৈরি (নাম + ইউজারনেম)
           const userHandle = username ? `(@${username})` : "";
           const fullName = escapeHtml(`${firstName} ${userHandle}`);
           const userLink = `<a href="tg://user?id=${chatId}">${fullName}</a>`;
 
           // ১. টেক্সট মেসেজ
           if (text && !msg.photo && !msg.video && !msg.voice && !msg.document) {
-              const prettyMsg = `👤 <b>${userLink}</b>:\n${escapeHtml(text)}\n\n🆔 #UID${chatId}`;
+              // এখানে replyContext যোগ করা হয়েছে
+              const prettyMsg = `👤 <b>${userLink}</b>:${replyContext}\n\n${escapeHtml(text)}\n\n🆔 #UID${chatId}`;
+              
               await api("sendMessage", { chat_id: MAIN_GROUP_ID, text: prettyMsg, parse_mode: "HTML", disable_web_page_preview: true });
           } 
-          // ২. মিডিয়া (ছবি/ভিডিও/ভয়েস)
+          // ২. মিডিয়া
           else {
-              // ক) আসল মিডিয়া পাঠানো (ক্যাপশন সহ)
               await api("copyMessage", { 
                   chat_id: MAIN_GROUP_ID, 
                   from_chat_id: chatId, 
                   message_id: msg.message_id 
               });
 
-              // খ) নোটিফিকেশন (নাম + ইউজারনেম সহ)
+              // এখানেও replyContext যোগ করা হয়েছে
               await api("sendMessage", { 
                   chat_id: MAIN_GROUP_ID, 
-                  text: `👤 <b>${userLink}</b> sent this 👆\n🆔 #UID${chatId}`, 
+                  text: `👤 <b>${userLink}</b> sent this 👆${replyContext}\n🆔 #UID${chatId}`, 
                   parse_mode: "HTML" 
               });
           }
