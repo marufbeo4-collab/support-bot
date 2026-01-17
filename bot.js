@@ -21,6 +21,7 @@ server.listen(process.env.PORT || 8080);
 
 console.log("🚀 Bot Started...");
 
+// অ্যালবাম বাকেট
 const albumBucket = {}; 
 
 async function api(method, data) {
@@ -66,7 +67,7 @@ const mainKeyboard = {
 };
 
 // --- অ্যালবাম পাঠানোর ফাংশন ---
-async function sendAlbumGroup(groupId, chatId, firstName, username, replyContext) {
+async function sendAlbumGroup(groupId, chatId, firstName, username, firstMsgId) {
     const messages = albumBucket[groupId].messages;
     delete albumBucket[groupId]; 
 
@@ -91,7 +92,10 @@ async function sendAlbumGroup(groupId, chatId, firstName, username, replyContext
         const fullName = escapeHtml(`${firstName} ${userHandle}`);
         const userLink = `<a href="tg://user?id=${chatId}">${fullName}</a>`;
 
-        const finalMsg = `👤 <b>${userLink}</b> sent photos 👆${replyContext}\n🆔 #UID${chatId}`;
+        // 🔥 ম্যাজিক আইডি: UserID এবং MessageID একসাথে রাখা হচ্ছে
+        const magicId = `#ID${chatId}_${firstMsgId}`;
+
+        const finalMsg = `👤 <b>${userLink}</b> sent photos 👆\n🆔 <code>${magicId}</code>`;
 
         await api("sendMessage", { 
             chat_id: MAIN_GROUP_ID, 
@@ -134,47 +138,36 @@ async function poll() {
                 continue;
             }
 
-            // 🔥 ADMIN REPLY SYSTEM (PREMIUM LOOK) 🔥
+            // 🔥 NATURAL REPLY LOGIC 🔥
             if (chatId === MAIN_GROUP_ID && msg.reply_to_message) {
+                // ১. গ্রুপ মেসেজ থেকে ম্যাজিক আইডি (#ID123_456) খুঁজে বের করা
                 let originalText = msg.reply_to_message.text || msg.reply_to_message.caption || "";
-                const match = originalText.match(/#UID(\d+)/);
+                
+                // Regex দিয়ে UserID এবং MessageID আলাদা করা
+                const match = originalText.match(/#ID(\d+)_(\d+)/);
 
                 if (match) {
-                    const userId = match[1]; 
-                    
-                    // ২. ক্লিন করা
-                    let userQuote = originalText
-                        .replace(/👤.*?(\n|$)/g, "") 
-                        .replace(/🆔.*?(\n|$)/g, "") 
-                        .replace(/↩️.*?(\n|$)/g, "") 
-                        .trim();
-                    
-                    if (userQuote.length > 60) userQuote = userQuote.substring(0, 60) + "..."; 
-                    if (userQuote === "") userQuote = "Media/File";
+                    const userId = match[1];     // ইউজারের চ্যাট আইডি
+                    const userMsgId = match[2];  // ইউজারের আসল মেসেজ আইডি
 
-                    // ৩. এডমিনের রিপ্লাই (Premium Blockquote Style)
-                    if (text) {
-                        // <blockquote> ট্যাগ ব্যবহার করা হচ্ছে যা টেলিগ্রামের অফিসিয়াল ফরম্যাট
-                        const replyMsg = `<blockquote>${escapeHtml(userQuote)}</blockquote>\n${escapeHtml(text)}`;
-                        
-                        await api("sendMessage", {
-                            chat_id: userId,
-                            text: replyMsg,
-                            parse_mode: "HTML"
+                    // ২. এডমিনের মেসেজ কাস্টমারের কাছে পাঠানো (Copy)
+                    // এবং 'reply_to_message_id' ব্যবহার করে ন্যাচারাল রিপ্লাই দেওয়া
+                    const sent = await api("copyMessage", {
+                        chat_id: userId,
+                        from_chat_id: chatId,
+                        message_id: msg.message_id,
+                        reply_to_message_id: userMsgId // ✅ এটাই আসল ম্যাজিক!
+                    });
+
+                    if (sent && sent.ok) {
+                        await api("setMessageReaction", {
+                            chat_id: chatId,
+                            message_id: msg.message_id,
+                            reaction: [{ type: "emoji", emoji: "⚡" }]
                         });
                     } else {
-                        await api("copyMessage", {
-                            chat_id: userId,
-                            from_chat_id: chatId,
-                            message_id: msg.message_id
-                        });
+                        await api("sendMessage", { chat_id: chatId, text: `❌ Failed`, parse_mode: "HTML" });
                     }
-
-                    await api("setMessageReaction", {
-                        chat_id: chatId,
-                        message_id: msg.message_id,
-                        reaction: [{ type: "emoji", emoji: "⚡" }]
-                    });
                 }
             }
             continue;
@@ -200,29 +193,14 @@ async function poll() {
           else if (text === CMD_GAMEID) await api("sendMessage", { chat_id: chatId, text: "👣 <b>গেম আইডি সমস্যা?</b>\n\nসঠিক আইডি এবং স্ক্রিনশট দিন।", parse_mode: "HTML" });
 
 
-          // --- REPLY CONTEXT (গ্রুপে দেখানোর জন্য) ---
-          let replyContext = "";
-          
-          if (msg.reply_to_message) {
-              // কাস্টমার যদি সাপোর্টের রিপ্লাই দেয়
-              let rText = msg.reply_to_message.text || msg.reply_to_message.caption || "🖼️ Media";
-              
-              // ক্লিন করা (কোটেশন মার্ক বাদ দেওয়া)
-              // যেহেতু এখন আমরা <blockquote> ব্যবহার করছি, তাই ক্লিন করার লজিক একটু আলাদা হতে পারে
-              // তবে সিম্পল টেক্সট নেওয়াই ভালো
-              
-              if (rText.length > 25) rText = rText.substring(0, 25) + "...";
-              replyContext = `\n↩️ <b>Replying to:</b> <i>"${escapeHtml(rText)}"</i>`;
-          }
-
-
           // ALBUM HANDLING
           if (msg.media_group_id) {
               const groupId = msg.media_group_id;
               if (!albumBucket[groupId]) {
                   albumBucket[groupId] = {
                       messages: [],
-                      timer: setTimeout(() => sendAlbumGroup(groupId, chatId, firstName, username, replyContext), 2500)
+                      // এখানে প্রথম মেসেজের আইডি পাঠাচ্ছি যাতে রিপ্লাই দেওয়া যায়
+                      timer: setTimeout(() => sendAlbumGroup(groupId, chatId, firstName, username, msg.message_id), 2500)
                   };
               }
               albumBucket[groupId].messages.push(msg);
@@ -234,9 +212,13 @@ async function poll() {
           const fullName = escapeHtml(`${firstName} ${userHandle}`);
           const userLink = `<a href="tg://user?id=${chatId}">${fullName}</a>`;
 
+          // 🔥 ম্যাজিক আইডি জেনারেট করা (UserID + MessageID)
+          // এটা গ্রুপে দেখা যাবে, কিন্তু এটাই আমাদের ডাটাবেসের কাজ করবে
+          const magicId = `#ID${chatId}_${msg.message_id}`;
+
           // ১. টেক্সট
           if (text && !msg.photo && !msg.video && !msg.voice && !msg.document) {
-              const prettyMsg = `👤 <b>${userLink}</b>:${replyContext}\n\n${escapeHtml(text)}\n\n🆔 #UID${chatId}`;
+              const prettyMsg = `👤 <b>${userLink}</b>:\n\n${escapeHtml(text)}\n\n🆔 <code>${magicId}</code>`;
               await api("sendMessage", { chat_id: MAIN_GROUP_ID, text: prettyMsg, parse_mode: "HTML", disable_web_page_preview: true });
           } 
           // ২. মিডিয়া
@@ -249,7 +231,7 @@ async function poll() {
 
               await api("sendMessage", { 
                   chat_id: MAIN_GROUP_ID, 
-                  text: `👤 <b>${userLink}</b> sent this 👆${replyContext}\n🆔 #UID${chatId}`, 
+                  text: `👤 <b>${userLink}</b> sent this 👆\n🆔 <code>${magicId}</code>`, 
                   parse_mode: "HTML" 
               });
           }
