@@ -21,9 +21,6 @@ server.listen(process.env.PORT || 8080);
 
 console.log("🚀 Bot Started...");
 
-// 🧠 স্মার্ট মেমোরি (Temporary Database)
-// এটা মনে রাখবে কোন গ্রুপের মেসেজ = কোন ইউজার মেসেজ
-const replyMap = new Map(); 
 const albumBucket = {}; 
 
 async function api(method, data) {
@@ -69,19 +66,19 @@ const mainKeyboard = {
 };
 
 // --- অ্যালবাম পাঠানোর ফাংশন ---
-async function sendAlbumGroup(groupId, chatId, firstName, username) {
+async function sendAlbumGroup(groupId, chatId, firstName, username, replyContext) {
     const messages = albumBucket[groupId].messages;
     delete albumBucket[groupId]; 
 
     if (!messages || messages.length === 0) return;
 
-    // ১. অ্যালবাম পাঠানো
     const msgWithCaption = messages.find(m => m.caption);
     const originalCaption = msgWithCaption ? msgWithCaption.caption : "";
 
     const mediaArray = messages.map((msg, index) => {
         let caption = "";
         if (index === 0 && originalCaption) caption = originalCaption; 
+
         if (msg.photo) return { type: 'photo', media: msg.photo[msg.photo.length - 1].file_id, caption: caption };
         else if (msg.video) return { type: 'video', media: msg.video.file_id, caption: caption };
         return null;
@@ -90,24 +87,18 @@ async function sendAlbumGroup(groupId, chatId, firstName, username) {
     if (mediaArray.length > 0) {
         await api("sendMediaGroup", { chat_id: MAIN_GROUP_ID, media: mediaArray });
         
-        // ২. নোটিফিকেশন পাঠানো (এটাতেই আমরা মেমোরি সেট করব)
         const userHandle = username ? `(@${username})` : "";
         const fullName = escapeHtml(`${firstName} ${userHandle}`);
         const userLink = `<a href="tg://user?id=${chatId}">${fullName}</a>`;
 
-        const finalMsg = `👤 <b>${userLink}</b> sent photos 👆\n🆔 #UID${chatId}`;
+        // ✅ গ্রুপে রিপ্লাই কন্টেক্সট আবার ফিরিয়ে আনা হলো
+        const finalMsg = `👤 <b>${userLink}</b> sent photos 👆${replyContext}\n🆔 #UID${chatId}`;
 
-        const sentMsg = await api("sendMessage", { 
+        await api("sendMessage", { 
             chat_id: MAIN_GROUP_ID, 
             text: finalMsg, 
             parse_mode: "HTML" 
         });
-
-        // 🧠 মেমোরিতে সেভ রাখা (যাতে রিপ্লাই দিলে কাজ করে)
-        // আমরা ধরে নিচ্ছি ইউজার অ্যালবামের প্রথম মেসেজটার রিপ্লাই চায়
-        if (sentMsg && sentMsg.result) {
-            replyMap.set(sentMsg.result.message_id, messages[0].message_id);
-        }
     }
 }
 
@@ -144,37 +135,53 @@ async function poll() {
                 continue;
             }
 
-            // 🔥 NATURAL REPLY SYSTEM 🔥
+            // 🔥 ADMIN REPLY SYSTEM 🔥
             if (chatId === MAIN_GROUP_ID && msg.reply_to_message) {
-                // ১. #UID বের করা (কার কাছে যাবে)
+                // ১. #UID বের করা
                 let originalText = msg.reply_to_message.text || msg.reply_to_message.caption || "";
                 const match = originalText.match(/#UID(\d+)/);
 
                 if (match) {
                     const userId = match[1]; 
                     
-                    // ২. মেমোরি চেক করা (কাস্টমারের কোন মেসেজটা ছিল?)
-                    // গ্রুপে যে মেসেজে রিপ্লাই দিয়েছেন, তার ID দিয়ে ইউজারের আসল মেসেজ ID খোঁজা
-                    const userTargetMsgId = replyMap.get(msg.reply_to_message.message_id);
+                    // ২. কাস্টমারের আগের মেসেজটা ক্লিন করা (Context)
+                    let userQuote = originalText
+                        .replace(/👤.*?(\n|$)/g, "") // নাম রিমুভ
+                        .replace(/🆔.*?(\n|$)/g, "") // আইডি রিমুভ
+                        .replace(/↩️.*?(\n|$)/g, "") // রিপ্লাই টেক্সট রিমুভ
+                        .trim();
+                    
+                    if (userQuote.length > 40) userQuote = userQuote.substring(0, 40) + "..."; 
+                    if (userQuote === "") userQuote = "Media/File";
 
-                    // ৩. ইউজারের কাছে পাঠানো
-                    const sent = await api("copyMessage", {
-                        chat_id: userId,
-                        from_chat_id: chatId,
-                        message_id: msg.message_id,
-                        // ✨ যাদু: যদি মেমোরিতে আইডি থাকে, তাহলে অরিজিনাল রিপ্লাই হবে
-                        reply_to_message_id: userTargetMsgId 
-                    });
-
-                    if (sent && sent.ok) {
-                        await api("setMessageReaction", {
-                            chat_id: chatId,
-                            message_id: msg.message_id,
-                            reaction: [{ type: "emoji", emoji: "⚡" }]
+                    // ৩. এডমিনের রিপ্লাই পাঠানো
+                    if (text) {
+                        // স্টাইলিশ রিপ্লাই (ন্যাচারাল ফিল দেওয়ার জন্য)
+                        // "Support:" এর বদলে আমরা শুধু একটা টিক মার্ক এবং বোল্ড টেক্সট দেব।
+                        // এবং নিচে ছোট করে রেফারেন্স দেব।
+                        
+                        const replyMsg = `✅ <b>${escapeHtml(text)}</b>\n\n<tg-spoiler>╰ 🔔 Re: ${escapeHtml(userQuote)}</tg-spoiler>`;
+                        
+                        await api("sendMessage", {
+                            chat_id: userId,
+                            text: replyMsg,
+                            parse_mode: "HTML"
                         });
                     } else {
-                        await api("sendMessage", { chat_id: chatId, text: `❌ Failed`, parse_mode: "HTML" });
+                        // মিডিয়া হলে ডাইরেক্ট কপি
+                        await api("copyMessage", {
+                            chat_id: userId,
+                            from_chat_id: chatId,
+                            message_id: msg.message_id
+                        });
                     }
+
+                    // ৪. কনফার্মেশন
+                    await api("setMessageReaction", {
+                        chat_id: chatId,
+                        message_id: msg.message_id,
+                        reaction: [{ type: "emoji", emoji: "⚡" }]
+                    });
                 }
             }
             continue;
@@ -200,13 +207,31 @@ async function poll() {
           else if (text === CMD_GAMEID) await api("sendMessage", { chat_id: chatId, text: "👣 <b>গেম আইডি সমস্যা?</b>\n\nসঠিক আইডি এবং স্ক্রিনশট দিন।", parse_mode: "HTML" });
 
 
+          // 🔥 HERE IS THE FIX: REPLY CONTEXT 🔥
+          // কাস্টমার কার রিপ্লাই দিচ্ছে সেটা গ্রুপে দেখানো
+          let replyContext = "";
+          
+          if (msg.reply_to_message) {
+              // কাস্টমার যদি সাপোর্টের মেসেজের রিপ্লাই দেয়
+              let rText = msg.reply_to_message.text || msg.reply_to_message.caption || "🖼️ Media";
+              
+              // আমরা সাপোর্টের মেসেজ থেকে ক্লিন করে আসল টেক্সট নেব
+              rText = rText.replace("✅", "").replace(/╰.*?$/g, "").trim(); 
+              
+              if (rText.length > 25) rText = rText.substring(0, 25) + "...";
+              
+              // এই লাইনটা গ্রুপে যাবে
+              replyContext = `\n↩️ <b>Replying to:</b> <i>"${escapeHtml(rText)}"</i>`;
+          }
+
+
           // ALBUM HANDLING
           if (msg.media_group_id) {
               const groupId = msg.media_group_id;
               if (!albumBucket[groupId]) {
                   albumBucket[groupId] = {
                       messages: [],
-                      timer: setTimeout(() => sendAlbumGroup(groupId, chatId, firstName, username), 2500)
+                      timer: setTimeout(() => sendAlbumGroup(groupId, chatId, firstName, username, replyContext), 2500)
                   };
               }
               albumBucket[groupId].messages.push(msg);
@@ -220,34 +245,25 @@ async function poll() {
 
           // ১. টেক্সট
           if (text && !msg.photo && !msg.video && !msg.voice && !msg.document) {
-              const prettyMsg = `👤 <b>${userLink}</b>:\n\n${escapeHtml(text)}\n\n🆔 #UID${chatId}`;
+              // ✅ গ্রুপে পাঠানোর সময় replyContext যোগ করা হয়েছে
+              const prettyMsg = `👤 <b>${userLink}</b>:${replyContext}\n\n${escapeHtml(text)}\n\n🆔 #UID${chatId}`;
               
-              const sentMsg = await api("sendMessage", { chat_id: MAIN_GROUP_ID, text: prettyMsg, parse_mode: "HTML", disable_web_page_preview: true });
-              
-              // 🧠 মেমোরি সেভ (গ্রুপের মেসেজ ID = ইউজারের মেসেজ ID)
-              if (sentMsg && sentMsg.result) {
-                  replyMap.set(sentMsg.result.message_id, msg.message_id);
-              }
+              await api("sendMessage", { chat_id: MAIN_GROUP_ID, text: prettyMsg, parse_mode: "HTML", disable_web_page_preview: true });
           } 
           // ২. মিডিয়া
           else {
-              // ক) মিডিয়া পাঠানো
-              const sentMedia = await api("copyMessage", { 
+              await api("copyMessage", { 
                   chat_id: MAIN_GROUP_ID, 
                   from_chat_id: chatId, 
                   message_id: msg.message_id 
               });
 
-              // খ) নোটিফিকেশন পাঠানো
-              const sentNotif = await api("sendMessage", { 
+              // ✅ এখানেও replyContext যোগ করা হয়েছে
+              await api("sendMessage", { 
                   chat_id: MAIN_GROUP_ID, 
-                  text: `👤 <b>${userLink}</b> sent this 👆\n🆔 #UID${chatId}`, 
+                  text: `👤 <b>${userLink}</b> sent this 👆${replyContext}\n🆔 #UID${chatId}`, 
                   parse_mode: "HTML" 
               });
-
-              // 🧠 মেমোরি সেভ: মিডিয়া এবং নোটিফিকেশন দুইটার রিপ্লাই দিলেই যেন কাজ করে
-              if (sentMedia && sentMedia.result) replyMap.set(sentMedia.result.message_id, msg.message_id);
-              if (sentNotif && sentNotif.result) replyMap.set(sentNotif.result.message_id, msg.message_id);
           }
           continue;
         }
