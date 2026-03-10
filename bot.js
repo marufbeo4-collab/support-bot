@@ -1,129 +1,235 @@
-const TOKEN = process.env.BOT_TOKEN;
-
-if (!TOKEN) {
-  console.error("❌ Error: BOT_TOKEN is missing!");
-  process.exit(1);
-}
-
+const TOKEN = "8620612566:AAF7RX5-RevFdYDR9TdUbL9axBEe3pKrM4k";
 const API = `https://api.telegram.org/bot${TOKEN}`;
-const MAIN_GROUP_ID = -1003535404975; 
+const MAIN_GROUP_ID = -5184100145;
 
-const http = require('http');
-const fs = require('fs'); // ফাইল সিস্টেম মডিউল
+const http = require("http");
+const fs = require("fs");
 
 const server = http.createServer((req, res) => {
-    res.writeHead(200);
-    res.end('Bot is Running...');
+  res.writeHead(200, { "Content-Type": "text/plain" });
+  res.end("GOWIN Support Bot is Running...");
 });
 server.listen(process.env.PORT || 8080);
 
-console.log("🚀 Bot Started...");
+console.log("🚀 GOWIN Support Bot Started...");
 
-// --- 🔒 BLOCK SYSTEM MEMORY ---
-const BLOCK_FILE = 'blocked.json';
+// ==============================
+// FILES / MEMORY
+// ==============================
+const BLOCK_FILE = "blocked.json";
 let blockedUsers = new Set();
+const albumBucket = {};
 
-// 1. সার্ভার অন হলে আগের ব্লক লিস্ট লোড করা
+// ==============================
+// LOAD BLOCK LIST
+// ==============================
 try {
-    if (fs.existsSync(BLOCK_FILE)) {
-        const data = fs.readFileSync(BLOCK_FILE);
-        blockedUsers = new Set(JSON.parse(data));
-        console.log(`🔒 Loaded ${blockedUsers.size} blocked users.`);
-    }
+  if (fs.existsSync(BLOCK_FILE)) {
+    const data = fs.readFileSync(BLOCK_FILE, "utf8");
+    blockedUsers = new Set(JSON.parse(data));
+    console.log(`🔒 Loaded ${blockedUsers.size} blocked users.`);
+  }
 } catch (err) {
-    console.error("⚠️ Error loading block list:", err);
+  console.error("⚠️ Error loading blocked list:", err);
 }
 
-// 2. ব্লক লিস্ট সেভ করার ফাংশন
 function saveBlockList() {
-    try {
-        fs.writeFileSync(BLOCK_FILE, JSON.stringify([...blockedUsers]));
-    } catch (err) {
-        console.error("⚠️ Error saving block list:", err);
-    }
+  try {
+    fs.writeFileSync(BLOCK_FILE, JSON.stringify([...blockedUsers], null, 2));
+  } catch (err) {
+    console.error("⚠️ Error saving blocked list:", err);
+  }
 }
 
-// অ্যালবাম বাকেট
-const albumBucket = {}; 
-
-async function api(method, data) {
+// ==============================
+// HELPERS
+// ==============================
+async function api(method, data = {}) {
   try {
     const res = await fetch(`${API}/${method}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(data),
     });
-    return res.json();
+    return await res.json();
   } catch (e) {
     console.error(`⚠️ API Error (${method}):`, e.message);
+    return null;
   }
 }
 
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-function escapeHtml(text) {
-    if (!text) return text;
-    return text
-        .replace(/&/g, "&amp;")
-        .replace(/</g, "&lt;")
-        .replace(/>/g, "&gt;")
-        .replace(/"/g, "&quot;")
-        .replace(/'/g, "&#039;");
+function escapeHtml(text = "") {
+  return String(text)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+}
+
+function getUserName(msg) {
+  const firstName = msg.from?.first_name || "User";
+  const username = msg.from?.username ? ` (@${msg.from.username})` : "";
+  return `${firstName}${username}`;
+}
+
+function getUserLink(msg) {
+  const chatId = msg.chat.id;
+  const fullName = escapeHtml(getUserName(msg));
+  return `<a href="tg://user?id=${chatId}">${fullName}</a>`;
+}
+
+function makeMagicId(chatId, msgId) {
+  return `#ID${chatId}_${msgId}`;
+}
+
+function shortText(text, max = 40) {
+  if (!text) return "Media";
+  return text.length > max ? text.slice(0, max) + "..." : text;
+}
+
+function getReplyContext(msg) {
+  if (!msg.reply_to_message) return "";
+  const rText =
+    msg.reply_to_message.text ||
+    msg.reply_to_message.caption ||
+    "🖼️ Media";
+  return `\n↩️ <b>Reply:</b> <i>${escapeHtml(shortText(rText, 35))}</i>`;
 }
 
 // ==============================
-// ✅ মেনু বাটন
+// MENU BUTTONS
 // ==============================
-const CMD_DEPOSIT = "DEPOSIT • PROBLEM 💳";
-const CMD_WITHDRAW = "WITHDRAW • PROBLEM 💰";
-const CMD_GAMEID = "GAME ID PROBLEM 👣";
-const CMD_OTHERS = "OTHERS ℹ️";
+const CMD_DEPOSIT = "💳 Deposit Problem";
+const CMD_WITHDRAW = "💰 Withdraw Problem";
+const CMD_GAMEID = "🆔 Game ID Problem";
+const CMD_OTHERS = "📩 Other Issues";
 
 const mainKeyboard = {
-    keyboard: [
-        [{ text: CMD_DEPOSIT }, { text: CMD_WITHDRAW }],
-        [{ text: CMD_GAMEID }, { text: CMD_OTHERS }]
-    ],
-    resize_keyboard: true,
-    one_time_keyboard: false
+  keyboard: [
+    [{ text: CMD_DEPOSIT }, { text: CMD_WITHDRAW }],
+    [{ text: CMD_GAMEID }, { text: CMD_OTHERS }],
+  ],
+  resize_keyboard: true,
+  one_time_keyboard: false,
 };
 
-async function sendAlbumGroup(groupId, chatId, firstName, username, firstMsgId, replyContext) {
-    const messages = albumBucket[groupId].messages;
-    delete albumBucket[groupId]; 
+// ==============================
+// PRESET USER MESSAGES
+// ==============================
+const TEXTS = {
+  welcome: (name) =>
+    `🎯 <b>Welcome to GOWIN Support</b>\n\n` +
+    `প্রিয় <b>${escapeHtml(name)}</b>,\n` +
+    `আপনার সমস্যার ধরন নিচের বাটন থেকে নির্বাচন করুন।\n\n` +
+    `📌 আমাদের টিম যত দ্রুত সম্ভব আপনাকে সহায়তা করবে।`,
 
-    if (!messages || messages.length === 0) return;
+  deposit:
+    `💳 <b>GOWIN Deposit Support</b>\n\n` +
+    `নিচের তথ্যগুলো একসাথে পাঠান:\n` +
+    `1. <b>Game ID</b>\n` +
+    `2. <b>TRX ID</b>\n` +
+    `3. <b>Payment Screenshot</b>\n\n` +
+    `✅ সব তথ্য সঠিক দিলে দ্রুত সমাধান হবে।`,
 
-    const msgWithCaption = messages.find(m => m.caption);
-    const originalCaption = msgWithCaption ? msgWithCaption.caption : "";
+  withdraw:
+    `💰 <b>GOWIN Withdraw Support</b>\n\n` +
+    `নিচের তথ্যগুলো পাঠান:\n` +
+    `1. <b>Game ID</b>\n` +
+    `2. <b>Amount</b>\n` +
+    `3. <b>Method</b> (Bkash / Nagad)\n` +
+    `4. প্রয়োজনে <b>Screenshot</b>\n\n` +
+    `✅ সঠিক তথ্য দিন, দ্রুত চেক করা হবে।`,
 
-    const mediaArray = messages.map((msg, index) => {
-        let caption = "";
-        if (index === 0 && originalCaption) caption = originalCaption; 
+  gameid:
+    `🆔 <b>GOWIN Game ID Support</b>\n\n` +
+    `আপনার <b>সঠিক Game ID</b> এবং\n` +
+    `সমস্যার <b>স্ক্রিনশট</b> পাঠান।`,
 
-        if (msg.photo) return { type: 'photo', media: msg.photo[msg.photo.length - 1].file_id, caption: caption };
-        else if (msg.video) return { type: 'video', media: msg.video.file_id, caption: caption };
-        return null;
-    }).filter(m => m !== null);
+  others:
+    `📩 <b>GOWIN General Support</b>\n\n` +
+    `আপনার সমস্যাটি বিস্তারিত লিখে পাঠান।\n` +
+    `প্রয়োজনে screenshot / video / document ও পাঠাতে পারেন।`,
 
-    if (mediaArray.length > 0) {
-        await api("sendMediaGroup", { chat_id: MAIN_GROUP_ID, media: mediaArray });
-        
-        const userHandle = username ? `(@${username})` : "";
-        const fullName = escapeHtml(`${firstName} ${userHandle}`);
-        const userLink = `<a href="tg://user?id=${chatId}">${fullName}</a>`;
+  blockedUser:
+    `🚫 <b>Access Restricted</b>\n\n` +
+    `আপনাকে বর্তমানে GOWIN Support থেকে block করা হয়েছে।`,
 
-        const magicId = `#ID${chatId}_${firstMsgId}`;
-        const finalMsg = `👤 <b>${userLink}</b> sent photos 👆${replyContext}\n🆔 <code>${magicId}</code>`;
+  adminBlocked:
+    `🚫 <b>GOWIN Notice</b>\n\nআপনাকে admin block করেছেন।`,
 
-        await api("sendMessage", { 
-            chat_id: MAIN_GROUP_ID, 
-            text: finalMsg, 
-            parse_mode: "HTML" 
-        });
-    }
+  adminUnblocked:
+    `✅ <b>GOWIN Notice</b>\n\nআপনাকে admin unblock করেছেন।`,
+};
+
+// ==============================
+// SEND ALBUM GROUP
+// ==============================
+async function sendAlbumGroup(groupId, originalMsg) {
+  const bucket = albumBucket[groupId];
+  if (!bucket || !bucket.messages?.length) return;
+
+  delete albumBucket[groupId];
+
+  const messages = bucket.messages;
+  const firstMsg = bucket.firstMsg;
+  const chatId = firstMsg.chat.id;
+  const userLink = getUserLink(firstMsg);
+  const magicId = makeMagicId(chatId, firstMsg.message_id);
+  const replyContext = getReplyContext(firstMsg);
+
+  const msgWithCaption = messages.find((m) => m.caption);
+  const originalCaption = msgWithCaption ? msgWithCaption.caption : "";
+
+  const media = messages
+    .map((msg, index) => {
+      const caption = index === 0 ? originalCaption : undefined;
+
+      if (msg.photo) {
+        return {
+          type: "photo",
+          media: msg.photo[msg.photo.length - 1].file_id,
+          caption,
+          parse_mode: caption ? "HTML" : undefined,
+        };
+      }
+
+      if (msg.video) {
+        return {
+          type: "video",
+          media: msg.video.file_id,
+          caption,
+          parse_mode: caption ? "HTML" : undefined,
+        };
+      }
+
+      return null;
+    })
+    .filter(Boolean);
+
+  if (media.length > 0) {
+    await api("sendMediaGroup", {
+      chat_id: MAIN_GROUP_ID,
+      media,
+    });
+
+    await api("sendMessage", {
+      chat_id: MAIN_GROUP_ID,
+      text:
+        `🔔 <b>GOWIN Support Request</b>\n\n` +
+        `👤 <b>User:</b> ${userLink}${replyContext}\n` +
+        `🆔 <code>${magicId}</code>\n` +
+        `📎 <b>Sent:</b> Album / Multiple Media`,
+      parse_mode: "HTML",
+    });
+  }
 }
 
+// ==============================
+// MAIN POLL LOOP
+// ==============================
 async function poll() {
   let offset = 0;
 
@@ -133,163 +239,255 @@ async function poll() {
       const data = await res.json();
 
       if (!data.ok) {
-        await sleep(5000);
+        await sleep(4000);
         continue;
       }
 
-      for (const u of data.result) {
-        offset = u.update_id + 1;
-        const msg = u.message;
+      for (const update of data.result) {
+        offset = update.update_id + 1;
+        const msg = update.message;
         if (!msg) continue;
         if (msg.from?.is_bot) continue;
 
         const chatId = msg.chat.id;
-        const text = msg.text || msg.caption || ""; 
-        const firstName = msg.from.first_name || "Member";
-        const username = msg.from.username || ""; 
+        const text = msg.text || msg.caption || "";
+        const isPrivate = msg.chat.type === "private";
+        const isGroup =
+          msg.chat.type === "group" || msg.chat.type === "supergroup";
 
         // ==============================
-        // 🚫 BLOCK CHECK (সবার আগে চেক করবে)
+        // BLOCK CHECK
         // ==============================
-        if (msg.chat.type === "private" && blockedUsers.has(chatId)) {
-            // ব্লকড ইউজার মেসেজ দিলে তাকে কিছুই দেখাবো না, বা চাইলে একটা வার্নিং দিতে পারেন
-            // await api("sendMessage", { chat_id: chatId, text: "🚫 You are blocked." });
-            continue; // নিচে আর যাবে না
-        }
-
-
-        // ==============================
-        // 🏢 GROUP SIDE (Admin Commands)
-        // ==============================
-        if (msg.chat.type === "group" || msg.chat.type === "supergroup") {
-            if (text === "/id") {
-                await api("sendMessage", { chat_id: chatId, text: `🆔 ID: <code>${chatId}</code>`, parse_mode: "HTML" });
-                continue;
-            }
-
-            // 🛑 BLOCK / UNBLOCK COMMANDS 🛑
-            if (chatId === MAIN_GROUP_ID && msg.reply_to_message) {
-                let originalText = msg.reply_to_message.text || msg.reply_to_message.caption || "";
-                const match = originalText.match(/#ID(\d+)_/); // আইডি বের করা
-
-                if (match) {
-                    const targetUserId = parseInt(match[1]);
-
-                    // Block Command
-                    if (text === "/block") {
-                        blockedUsers.add(targetUserId);
-                        saveBlockList(); // ফাইলে সেভ
-                        
-                        await api("sendMessage", { chat_id: chatId, text: `🚫 User <code>${targetUserId}</code> has been <b>BLOCKED</b>.`, parse_mode: "HTML" });
-                        await api("sendMessage", { chat_id: targetUserId, text: `🚫 <b>You have been blocked by the admin.</b>`, parse_mode: "HTML" });
-                        continue;
-                    }
-
-                    // Unblock Command
-                    if (text === "/unblock") {
-                        blockedUsers.delete(targetUserId);
-                        saveBlockList(); // ফাইলে সেভ
-
-                        await api("sendMessage", { chat_id: chatId, text: `✅ User <code>${targetUserId}</code> has been <b>UNBLOCKED</b>.`, parse_mode: "HTML" });
-                        await api("sendMessage", { chat_id: targetUserId, text: `✅ <b>You have been unblocked.</b>`, parse_mode: "HTML" });
-                        continue;
-                    }
-                }
-            }
-
-            // 🔥 NATURAL REPLY 🔥
-            if (chatId === MAIN_GROUP_ID && msg.reply_to_message) {
-                let originalText = msg.reply_to_message.text || msg.reply_to_message.caption || "";
-                const match = originalText.match(/#ID(\d+)_(\d+)/);
-
-                if (match) {
-                    const userId = match[1];     
-                    const userMsgId = match[2];  
-
-                    // রিপ্লাই পাঠানোর আগে চেক করা, ইউজার ব্লকড কিনা
-                    if (blockedUsers.has(parseInt(userId))) {
-                         await api("sendMessage", { chat_id: chatId, text: "⚠️ This user is blocked. Unblock first.", parse_mode: "HTML" });
-                         continue;
-                    }
-
-                    const sent = await api("copyMessage", {
-                        chat_id: userId,
-                        from_chat_id: chatId,
-                        message_id: msg.message_id,
-                        reply_to_message_id: userMsgId 
-                    });
-
-                    if (sent && sent.ok) {
-                        await api("setMessageReaction", {
-                            chat_id: chatId,
-                            message_id: msg.message_id,
-                            reaction: [{ type: "emoji", emoji: "⚡" }]
-                        });
-                    }
-                }
-            }
-            continue;
+        if (isPrivate && blockedUsers.has(chatId)) {
+          await api("sendMessage", {
+            chat_id: chatId,
+            text: TEXTS.blockedUser,
+            parse_mode: "HTML",
+          });
+          continue;
         }
 
         // ==============================
-        // 👤 USER SIDE
+        // GROUP SIDE
         // ==============================
-        if (msg.chat.type === "private") {
-          
-          if (text === "/start") {
+        if (isGroup) {
+          if (text === "/id") {
             await api("sendMessage", {
               chat_id: chatId,
-              text: `🌟 <b>WELCOME TO SUPER CLUB</b>\nপ্রিয় ${escapeHtml(firstName)}, আপনার সমস্যাটি নিচে বাটন সিলেক্ট করে জানান।`,
+              text: `🆔 <b>Group ID:</b> <code>${chatId}</code>`,
               parse_mode: "HTML",
-              reply_markup: mainKeyboard
             });
             continue;
           }
 
-          if (text === CMD_DEPOSIT) await api("sendMessage", { chat_id: chatId, text: "💳 <b>ডিপোজিট সমস্যা?</b>\n\n১. গেম আইডি\n২. TrxID\n৩. স্ক্রিনশট দিন", parse_mode: "HTML" });
-          else if (text === CMD_WITHDRAW) await api("sendMessage", { chat_id: chatId, text: "💰 <b>উইথড্র সমস্যা?</b>\n\n১. গেম আইডি\n২. টাকার পরিমাণ\n৩. মেথড (Bkash/Nagad) লিখুন", parse_mode: "HTML" });
-          else if (text === CMD_GAMEID) await api("sendMessage", { chat_id: chatId, text: "👣 <b>গেম আইডি সমস্যা?</b>\n\nসঠিক আইডি এবং স্ক্রিনশট দিন।", parse_mode: "HTML" });
+          // Admin block/unblock only in main group and replying to forwarded support tag
+          if (chatId === MAIN_GROUP_ID && msg.reply_to_message) {
+            const repliedText =
+              msg.reply_to_message.text || msg.reply_to_message.caption || "";
+            const match = repliedText.match(/#ID(\d+)_/);
 
-          // REPLY CONTEXT
-          let replyContext = "";
-          if (msg.reply_to_message) {
-              let rText = msg.reply_to_message.text || msg.reply_to_message.caption || "🖼️ Media";
-              if (rText.length > 25) rText = rText.substring(0, 25) + "...";
-              replyContext = `\n↩️ <b>Replying to:</b> <i>"${escapeHtml(rText)}"</i>`;
-          }
+            if (match) {
+              const targetUserId = Number(match[1]);
 
-          // ALBUM HANDLING
-          if (msg.media_group_id) {
-              const groupId = msg.media_group_id;
-              if (!albumBucket[groupId]) {
-                  albumBucket[groupId] = {
-                      messages: [],
-                      timer: setTimeout(() => sendAlbumGroup(groupId, chatId, firstName, username, msg.message_id, replyContext), 2500)
-                  };
+              if (text === "/block") {
+                blockedUsers.add(targetUserId);
+                saveBlockList();
+
+                await api("sendMessage", {
+                  chat_id: chatId,
+                  text:
+                    `🚫 <b>Blocked Successfully</b>\n\n` +
+                    `User ID: <code>${targetUserId}</code>`,
+                  parse_mode: "HTML",
+                });
+
+                await api("sendMessage", {
+                  chat_id: targetUserId,
+                  text: TEXTS.adminBlocked,
+                  parse_mode: "HTML",
+                });
+                continue;
               }
-              albumBucket[groupId].messages.push(msg);
-              continue;
+
+              if (text === "/unblock") {
+                blockedUsers.delete(targetUserId);
+                saveBlockList();
+
+                await api("sendMessage", {
+                  chat_id: chatId,
+                  text:
+                    `✅ <b>Unblocked Successfully</b>\n\n` +
+                    `User ID: <code>${targetUserId}</code>`,
+                  parse_mode: "HTML",
+                });
+
+                await api("sendMessage", {
+                  chat_id: targetUserId,
+                  text: TEXTS.adminUnblocked,
+                  parse_mode: "HTML",
+                });
+                continue;
+              }
+            }
           }
 
-          // SINGLE MESSAGE
-          const userHandle = username ? `(@${username})` : "";
-          const fullName = escapeHtml(`${firstName} ${userHandle}`);
-          const userLink = `<a href="tg://user?id=${chatId}">${fullName}</a>`;
-          const magicId = `#ID${chatId}_${msg.message_id}`;
+          // Natural admin reply to user
+          if (chatId === MAIN_GROUP_ID && msg.reply_to_message) {
+            const repliedText =
+              msg.reply_to_message.text || msg.reply_to_message.caption || "";
+            const match = repliedText.match(/#ID(\d+)_(\d+)/);
+
+            if (match) {
+              const userId = Number(match[1]);
+              const userMsgId = Number(match[2]);
+
+              if (blockedUsers.has(userId)) {
+                await api("sendMessage", {
+                  chat_id: chatId,
+                  text:
+                    `⚠️ <b>This user is currently blocked.</b>\n` +
+                    `Unblock first to reply.`,
+                  parse_mode: "HTML",
+                });
+                continue;
+              }
+
+              const sent = await api("copyMessage", {
+                chat_id: userId,
+                from_chat_id: chatId,
+                message_id: msg.message_id,
+                reply_to_message_id: userMsgId,
+              });
+
+              if (sent && sent.ok) {
+                await api("setMessageReaction", {
+                  chat_id: chatId,
+                  message_id: msg.message_id,
+                  reaction: [{ type: "emoji", emoji: "⚡" }],
+                });
+              }
+            }
+          }
+
+          continue;
+        }
+
+        // ==============================
+        // USER SIDE
+        // ==============================
+        if (isPrivate) {
+          const firstName = msg.from?.first_name || "User";
+
+          if (text === "/start") {
+            await api("sendMessage", {
+              chat_id: chatId,
+              text: TEXTS.welcome(firstName),
+              parse_mode: "HTML",
+              reply_markup: mainKeyboard,
+            });
+            continue;
+          }
+
+          if (text === CMD_DEPOSIT) {
+            await api("sendMessage", {
+              chat_id: chatId,
+              text: TEXTS.deposit,
+              parse_mode: "HTML",
+            });
+            continue;
+          }
+
+          if (text === CMD_WITHDRAW) {
+            await api("sendMessage", {
+              chat_id: chatId,
+              text: TEXTS.withdraw,
+              parse_mode: "HTML",
+            });
+            continue;
+          }
+
+          if (text === CMD_GAMEID) {
+            await api("sendMessage", {
+              chat_id: chatId,
+              text: TEXTS.gameid,
+              parse_mode: "HTML",
+            });
+            continue;
+          }
+
+          if (text === CMD_OTHERS) {
+            await api("sendMessage", {
+              chat_id: chatId,
+              text: TEXTS.others,
+              parse_mode: "HTML",
+            });
+            continue;
+          }
+
+          // Album handling
+          if (msg.media_group_id) {
+            const groupId = msg.media_group_id;
+
+            if (!albumBucket[groupId]) {
+              albumBucket[groupId] = {
+                firstMsg: msg,
+                messages: [],
+                timer: setTimeout(() => sendAlbumGroup(groupId, msg), 2500),
+              };
+            }
+
+            albumBucket[groupId].messages.push(msg);
+            continue;
+          }
+
+          // Single message forward/copy to admin group
+          const userLink = getUserLink(msg);
+          const magicId = makeMagicId(chatId, msg.message_id);
+          const replyContext = getReplyContext(msg);
 
           if (text && !msg.photo && !msg.video && !msg.voice && !msg.document) {
-              const prettyMsg = `👤 <b>${userLink}</b>:${replyContext}\n\n${escapeHtml(text)}\n\n🆔 <code>${magicId}</code>`;
-              await api("sendMessage", { chat_id: MAIN_GROUP_ID, text: prettyMsg, parse_mode: "HTML", disable_web_page_preview: true });
-          } 
-          else {
-              await api("copyMessage", { chat_id: MAIN_GROUP_ID, from_chat_id: chatId, message_id: msg.message_id });
-              await api("sendMessage", { chat_id: MAIN_GROUP_ID, text: `👤 <b>${userLink}</b> sent this 👆${replyContext}\n🆔 <code>${magicId}</code>`, parse_mode: "HTML" });
+            await api("sendMessage", {
+              chat_id: MAIN_GROUP_ID,
+              text:
+                `🔔 <b>GOWIN Support Request</b>\n\n` +
+                `👤 <b>User:</b> ${userLink}${replyContext}\n\n` +
+                `📝 <b>Message:</b>\n${escapeHtml(text)}\n\n` +
+                `🆔 <code>${magicId}</code>`,
+              parse_mode: "HTML",
+              disable_web_page_preview: true,
+            });
+          } else {
+            await api("copyMessage", {
+              chat_id: MAIN_GROUP_ID,
+              from_chat_id: chatId,
+              message_id: msg.message_id,
+            });
+
+            await api("sendMessage", {
+              chat_id: MAIN_GROUP_ID,
+              text:
+                `🔔 <b>GOWIN Support Request</b>\n\n` +
+                `👤 <b>User:</b> ${userLink}${replyContext}\n` +
+                `📎 <b>Sent:</b> Media / File\n` +
+                `🆔 <code>${magicId}</code>`,
+              parse_mode: "HTML",
+            });
           }
+
+          // Optional confirmation to user
+          await api("sendMessage", {
+            chat_id: chatId,
+            text:
+              `✅ <b>GOWIN Support Received Your Message</b>\n\n` +
+              `আমাদের টিম আপনার message পেয়েছে। একটু অপেক্ষা করুন।`,
+            parse_mode: "HTML",
+          });
+
           continue;
         }
       }
     } catch (err) {
-      console.error("🔥 Error:", err.message);
+      console.error("🔥 Polling Error:", err.message);
       await sleep(3000);
     }
   }
