@@ -103,15 +103,35 @@ loadData();
 // ==============================
 // BLOCK HELPERS
 // ==============================
+function clearUserMessageCache(userId) {
+  const uid = String(userId);
+
+  for (const key of Object.keys(processedMessages)) {
+    if (key.startsWith(`${uid}_`)) {
+      delete processedMessages[key];
+    }
+  }
+
+  for (const key of [...runtimeProcessedMessages]) {
+    if (key.startsWith(`${uid}_`) || key.includes(`_${uid}_`)) {
+      runtimeProcessedMessages.delete(key);
+    }
+  }
+
+  saveProcessedMessages();
+}
+
 function blockUser(userId) {
   const id = Number(userId);
   blockedUsers.add(id);
+  clearUserMessageCache(id);
   return persistBlockedUsers();
 }
 
 function unblockUser(userId) {
   const id = Number(userId);
   blockedUsers.delete(id);
+  clearUserMessageCache(id);
   return persistBlockedUsers();
 }
 
@@ -264,6 +284,27 @@ async function sendTyping(chatId) {
     chat_id: chatId,
     action: "typing"
   });
+}
+
+function normalizeText(text = "") {
+  return String(text).trim().replace(/\s+/g, " ");
+}
+
+function isStatusButton(text = "") {
+  const t = normalizeText(text).toLowerCase();
+  return (
+    t === normalizeText(BTN_STATUS).toLowerCase() ||
+    t.includes("my ticket status") ||
+    t.includes("ticket status")
+  );
+}
+
+function isHelpButton(text = "") {
+  const t = normalizeText(text).toLowerCase();
+  return (
+    t === normalizeText(BTN_HELP).toLowerCase() ||
+    t.includes("how to submit")
+  );
 }
 
 // ==============================
@@ -485,7 +526,7 @@ async function handlePrivateMessage(msg) {
     return;
   }
 
-  if (text === BTN_HELP) {
+  if (isHelpButton(text)) {
     await api("sendMessage", {
       chat_id: userId,
       text: helpText(),
@@ -494,7 +535,7 @@ async function handlePrivateMessage(msg) {
     return;
   }
 
-  if (text === BTN_STATUS) {
+  if (isStatusButton(text)) {
     const ticketId = getLastTicket(userId);
 
     if (!ticketId) {
@@ -511,10 +552,10 @@ async function handlePrivateMessage(msg) {
     await api("sendMessage", {
       chat_id: userId,
       text:
-        `📌 <b>Your Latest Ticket</b>\n\n` +
-        `Ticket: <code>${ticketId}</code>\n` +
-        `Category: <b>${escapeHtml(getCategory(userId))}</b>\n` +
-        `Status: <b>${escapeHtml(getLastTicketStatus(userId))}</b>`,
+        `📌 <b>YOUR LATEST TICKET</b>\n\n` +
+        `🎟 Ticket: <code>${ticketId}</code>\n` +
+        `📂 Category: <b>${escapeHtml(getCategory(userId))}</b>\n` +
+        `📊 Status: <b>${escapeHtml(getLastTicketStatus(userId))}</b>`,
       parse_mode: "HTML"
     });
     return;
@@ -650,9 +691,11 @@ async function handleGroupMessage(msg) {
     });
 
     if (ok) {
+      setLastTicketStatus(meta.userId, "OPEN");
+
       await api("sendMessage", {
         chat_id: meta.userId,
-        text: `✅ <b>You have been unblocked by GOWIN Support.</b>`,
+        text: `✅ <b>You have been unblocked by GOWIN Support.</b>\n\nYou can send messages now.`,
         parse_mode: "HTML"
       });
     }
