@@ -17,7 +17,7 @@ const server = http.createServer((req, res) => {
 });
 server.listen(process.env.PORT || 8080);
 
-console.log("🚀 GOWIN Support Bot Started");
+console.log("🚀 GOWIN Support Bot Started with Advanced Tech!");
 
 // ==============================
 // FILES
@@ -38,7 +38,7 @@ let processedMessages = {};
 const albumBucket = {};
 const runtimeProcessedUpdates = new Set();
 const runtimeProcessedMessages = new Set();
-let isPolling = false; // 🔒 Strict loop lock added
+let isPolling = false;
 
 // ==============================
 // LOAD / SAVE
@@ -86,17 +86,9 @@ function loadData() {
   processedMessages = loadJson(MSG_CACHE_FILE, {});
 }
 
-function saveState() {
-  saveJson(STATE_FILE, botState);
-}
-
-function saveProfiles() {
-  saveJson(PROFILE_FILE, userProfile);
-}
-
-function saveProcessedMessages() {
-  saveJson(MSG_CACHE_FILE, processedMessages);
-}
+function saveState() { saveJson(STATE_FILE, botState); }
+function saveProfiles() { saveJson(PROFILE_FILE, userProfile); }
+function saveProcessedMessages() { saveJson(MSG_CACHE_FILE, processedMessages); }
 
 loadData();
 
@@ -161,11 +153,6 @@ function escapeHtml(text = "") {
     .replace(/'/g, "&#039;");
 }
 
-function shortText(text, max = 120) {
-  if (!text) return "No text";
-  return text.length > max ? text.slice(0, max) + "..." : text;
-}
-
 function getUserName(msg) {
   const firstName = msg.from?.first_name || "User";
   const username = msg.from?.username ? ` (@${msg.from.username})` : "";
@@ -202,9 +189,7 @@ function setCategory(userId, category) {
   saveProfiles();
 }
 
-function getCategory(userId) {
-  return userProfile[userId]?.category || "GENERAL";
-}
+function getCategory(userId) { return userProfile[userId]?.category || "GENERAL"; }
 
 function setLastTicket(userId, ticketId) {
   userProfile[userId] = userProfile[userId] || {};
@@ -212,13 +197,7 @@ function setLastTicket(userId, ticketId) {
   saveProfiles();
 }
 
-function getLastTicket(userId) {
-  return userProfile[userId]?.lastTicketId || null;
-}
-
-function getLastTicketStatus(userId) {
-  return userProfile[userId]?.lastTicketStatus || "OPEN";
-}
+function getLastTicket(userId) { return userProfile[userId]?.lastTicketId || null; }
 
 function setLastTicketStatus(userId, status) {
   userProfile[userId] = userProfile[userId] || {};
@@ -226,25 +205,17 @@ function setLastTicketStatus(userId, status) {
   saveProfiles();
 }
 
-function messageKey(msg) {
-  return `${msg.chat.id}_${msg.message_id}`;
-}
+function getLastTicketStatus(userId) { return userProfile[userId]?.lastTicketStatus || "OPEN"; }
 
-function updateKey(update) {
-  return String(update.update_id);
-}
+function messageKey(msg) { return `${msg.chat.id}_${msg.message_id}`; }
+function updateKey(update) { return String(update.update_id); }
 
 function alreadyProcessedMessage(msg) {
   const key = messageKey(msg);
   const now = Date.now();
-
   if (runtimeProcessedMessages.has(key)) return true;
   runtimeProcessedMessages.add(key);
-
-  if (processedMessages[key] && now - processedMessages[key] < 86400000) {
-    return true;
-  }
-
+  if (processedMessages[key] && now - processedMessages[key] < 86400000) return true;
   processedMessages[key] = now;
   saveProcessedMessages();
   return false;
@@ -252,19 +223,11 @@ function alreadyProcessedMessage(msg) {
 
 function extractMetaFromText(text = "") {
   const idMatch = text.match(/#ID(\d+)_(\d+)/);
-  return {
-    userId: idMatch ? Number(idMatch[1]) : null,
-    userMsgId: idMatch ? Number(idMatch[2]) : null
-  };
+  return { userId: idMatch ? Number(idMatch[1]) : null, userMsgId: idMatch ? Number(idMatch[2]) : null };
 }
 
-async function sendTyping(chatId) {
-  await api("sendChatAction", { chat_id: chatId, action: "typing" });
-}
-
-function normalizeText(text = "") {
-  return String(text).trim().replace(/\s+/g, " ").toLowerCase();
-}
+async function sendTyping(chatId) { await api("sendChatAction", { chat_id: chatId, action: "typing" }); }
+function normalizeText(text = "") { return String(text).trim().replace(/\s+/g, " ").toLowerCase(); }
 
 // ==============================
 // MENU
@@ -287,24 +250,11 @@ const mainKeyboard = {
 };
 
 function welcomeText(name) {
-  return (
-    `🎯 <b>WELCOME TO GOWIN SUPPORT</b>\n\n` +
-    `Hello <b>${escapeHtml(name)}</b>,\n` +
-    `Please select your problem type from the menu below.\n\n` +
-    `Our support team will respond as soon as possible.`
-  );
+  return `🎯 <b>WELCOME TO GOWIN SUPPORT</b>\n\nHello <b>${escapeHtml(name)}</b>,\nPlease select your problem type from the menu below.\n\nOur support team will respond as soon as possible.`;
 }
 
 function helpText() {
-  return (
-    `📘 <b>HOW TO SUBMIT PROPERLY</b>\n\n` +
-    `Please send these details:\n` +
-    `• Game ID\n` +
-    `• Short problem description\n` +
-    `• TRX ID if payment related\n` +
-    `• Screenshot / proof if available\n\n` +
-    `✅ Clear details = faster support`
-  );
+  return `📘 <b>HOW TO SUBMIT PROPERLY</b>\n\nPlease send these details:\n• Game ID\n• Short problem description\n• TRX ID if payment related\n• Screenshot / proof if available\n\n✅ Clear details = faster support`;
 }
 
 function categoryPrompt(category) {
@@ -318,20 +268,21 @@ function categoryPrompt(category) {
 }
 
 // ==============================
-// COMPACT GROUP FORMAT
+// ADVANCED ADMIN KEYBOARD
 // ==============================
+function getAdminInlineKeyboard(userId) {
+  return {
+    inline_keyboard: [
+      [{ text: "🔒 Close Ticket", callback_data: `close_${userId}` }],
+      [{ text: "🚫 Block User", callback_data: `block_${userId}` }, { text: "✅ Unblock", callback_data: `unblock_${userId}` }]
+    ]
+  };
+}
+
 function buildCompactTicketMessage(msg, category, ticketId, preview) {
   const magicId = makeMagicId(msg.chat.id, msg.message_id);
   const userLink = getUserLink(msg);
-  return (
-    `🔔 <b>GOWIN SUPPORT TICKET</b>\n` +
-    `🎟 <b>${ticketId}</b>\n` +
-    `👤 ${userLink}\n` +
-    `📂 <b>${escapeHtml(category)}</b>\n\n` +
-    `💬 <b>Message:</b>\n` +
-    `<blockquote>${escapeHtml(preview)}</blockquote>\n\n` +
-    `🆔 <code>${magicId}</code>`
-  );
+  return `🔔 <b>GOWIN SUPPORT TICKET</b>\n🎟 <b>${ticketId}</b>\n👤 ${userLink}\n📂 <b>${escapeHtml(category)}</b>\n\n💬 <b>Message:</b>\n<blockquote>${escapeHtml(preview)}</blockquote>\n\n🆔 <code>${magicId}</code>`;
 }
 
 // ==============================
@@ -361,10 +312,12 @@ async function sendAlbumGroup(groupId) {
   }).filter(Boolean);
 
   await api("sendMediaGroup", { chat_id: MAIN_GROUP_ID, media });
+  
   await api("sendMessage", {
     chat_id: MAIN_GROUP_ID,
     text: buildCompactTicketMessage(firstMsg, category, ticketId, originalCaption),
-    parse_mode: "HTML"
+    parse_mode: "HTML",
+    reply_markup: getAdminInlineKeyboard(userId) // 🔥 Advanced Tech
   });
 
   await api("sendMessage", {
@@ -382,7 +335,24 @@ async function handlePrivateMessage(msg) {
   const text = msg.text || msg.caption || "";
   const tCheck = normalizeText(text);
 
-  if (isBlocked(userId)) return;
+  // 🔥 STRICT FIREWALL FOR BLOCKED USERS
+  if (isBlocked(userId)) {
+    const now = Date.now();
+    const lastWarn = processedMessages[`warn_${userId}`] || 0;
+    
+    // Only warn them once every 5 minutes to prevent bot lag
+    if (now - lastWarn > 300000) {
+      await api("sendMessage", {
+        chat_id: userId,
+        text: `🚫 <b>ACCOUNT SUSPENDED</b>\n\nYou have been blocked by the admin for violating rules or spamming. You can no longer send messages to support.`,
+        parse_mode: "HTML",
+        reply_markup: { remove_keyboard: true } // 🔥 Kills their menu completely
+      });
+      processedMessages[`warn_${userId}`] = now;
+      saveProcessedMessages();
+    }
+    return; // Strictly stop here
+  }
 
   if (text === "/start") {
     await sendTyping(userId);
@@ -395,7 +365,6 @@ async function handlePrivateMessage(msg) {
     return;
   }
 
-  // 🛠️ FIX: Better Button Detection to prevent false menu triggers
   if (tCheck.includes("deposit") || text === BTN_DEPOSIT) {
     setCategory(userId, "DEPOSIT");
     await api("sendMessage", { chat_id: userId, text: categoryPrompt("DEPOSIT"), parse_mode: "HTML" });
@@ -423,40 +392,27 @@ async function handlePrivateMessage(msg) {
   if (tCheck.includes("ticket status") || text === BTN_STATUS) {
     const ticketId = getLastTicket(userId);
     if (!ticketId) {
-      await api("sendMessage", {
-        chat_id: userId,
-        text: `📌 <b>No recent ticket found.</b>\n\nPlease select an issue type and send your message first.`,
-        parse_mode: "HTML"
-      });
+      await api("sendMessage", { chat_id: userId, text: `📌 <b>No recent ticket found.</b>\n\nPlease select an issue type and send your message first.`, parse_mode: "HTML" });
       return;
     }
-    await api("sendMessage", {
-      chat_id: userId,
-      text: `📌 <b>YOUR LATEST TICKET</b>\n\n🎟 Ticket: <code>${ticketId}</code>\n📂 Category: <b>${escapeHtml(getCategory(userId))}</b>\n📊 Status: <b>${escapeHtml(getLastTicketStatus(userId))}</b>`,
-      parse_mode: "HTML"
-    });
+    await api("sendMessage", { chat_id: userId, text: `📌 <b>YOUR LATEST TICKET</b>\n\n🎟 Ticket: <code>${ticketId}</code>\n📂 Category: <b>${escapeHtml(getCategory(userId))}</b>\n📊 Status: <b>${escapeHtml(getLastTicketStatus(userId))}</b>`, parse_mode: "HTML" });
     return;
   }
 
   if (msg.media_group_id) {
     const groupId = msg.media_group_id;
     if (!albumBucket[groupId]) {
-      albumBucket[groupId] = {
-        firstMsg: msg,
-        messages: [],
-        timer: setTimeout(() => sendAlbumGroup(groupId), 1800)
-      };
+      albumBucket[groupId] = { firstMsg: msg, messages: [], timer: setTimeout(() => sendAlbumGroup(groupId), 1800) };
     }
     albumBucket[groupId].messages.push(msg);
     return;
   }
 
-  // 🛠️ FIX: Cooldown to prevent spamming users with multiple "Support request received" messages
   const category = getCategory(userId);
   const ticketId = makeTicketId();
   const now = Date.now();
   const lastMsgTime = processedMessages[`spam_${userId}`] || 0;
-  const isSpam = (now - lastMsgTime) < 4000; // 4 seconds cooldown
+  const isSpam = (now - lastMsgTime) < 4000;
   
   processedMessages[`spam_${userId}`] = now;
   setLastTicket(userId, ticketId);
@@ -467,37 +423,95 @@ async function handlePrivateMessage(msg) {
       chat_id: MAIN_GROUP_ID,
       text: buildCompactTicketMessage(msg, category, ticketId, text),
       parse_mode: "HTML",
-      disable_web_page_preview: true
+      disable_web_page_preview: true,
+      reply_markup: getAdminInlineKeyboard(userId) // 🔥 Advanced Tech
     });
 
     if (!isSpam) {
-      await api("sendMessage", {
-        chat_id: userId,
-        text: `✅ <b>Support request received</b>\n\nTicket: <code>${ticketId}</code>\nCategory: <b>${escapeHtml(category)}</b>\nStatus: <b>OPEN</b>`,
-        parse_mode: "HTML"
-      });
+      await api("sendMessage", { chat_id: userId, text: `✅ <b>Support request received</b>\n\nTicket: <code>${ticketId}</code>\nCategory: <b>${escapeHtml(category)}</b>\nStatus: <b>OPEN</b>`, parse_mode: "HTML" });
     }
     return;
   }
 
   await api("copyMessage", { chat_id: MAIN_GROUP_ID, from_chat_id: userId, message_id: msg.message_id });
+  
   await api("sendMessage", {
     chat_id: MAIN_GROUP_ID,
     text: buildCompactTicketMessage(msg, category, ticketId, msg.caption || "Media / File"),
-    parse_mode: "HTML"
+    parse_mode: "HTML",
+    reply_markup: getAdminInlineKeyboard(userId) // 🔥 Advanced Tech
   });
 
   if (!isSpam) {
-    await api("sendMessage", {
-      chat_id: userId,
-      text: `✅ <b>Support request received</b>\n\nTicket: <code>${ticketId}</code>\nCategory: <b>${escapeHtml(category)}</b>\nStatus: <b>OPEN</b>`,
-      parse_mode: "HTML"
-    });
+    await api("sendMessage", { chat_id: userId, text: `✅ <b>Support request received</b>\n\nTicket: <code>${ticketId}</code>\nCategory: <b>${escapeHtml(category)}</b>\nStatus: <b>OPEN</b>`, parse_mode: "HTML" });
   }
 }
 
 // ==============================
-// GROUP HANDLER
+// CALLBACK QUERY HANDLER (NEW ADVANCE TECH)
+// ==============================
+async function handleCallbackQuery(cb) {
+  const data = cb.data;
+  const adminGroupId = cb.message?.chat?.id;
+  const messageId = cb.message?.message_id;
+
+  if (adminGroupId !== MAIN_GROUP_ID) {
+    await api("answerCallbackQuery", { callback_query_id: cb.id });
+    return;
+  }
+
+  const senderId = cb.from.id;
+  const admin = await isGroupAdmin(adminGroupId, senderId);
+  
+  if (!admin) {
+    await api("answerCallbackQuery", { callback_query_id: cb.id, text: "⛔ Action Denied: Admins only!", show_alert: true });
+    return;
+  }
+
+  const parts = data.split("_");
+  const action = parts[0];
+  const targetUserId = Number(parts[1]);
+
+  if (action === "close") {
+    setLastTicketStatus(targetUserId, "CLOSED");
+    await api("sendMessage", { chat_id: targetUserId, text: `✅ <b>Your support request is now closed.</b>`, parse_mode: "HTML" });
+    await api("answerCallbackQuery", { callback_query_id: cb.id, text: "Ticket Closed!" });
+    
+    // Update button layout dynamically
+    await api("editMessageReplyMarkup", {
+      chat_id: adminGroupId,
+      message_id: messageId,
+      reply_markup: {
+        inline_keyboard: [[{ text: "🚫 Block User", callback_data: `block_${targetUserId}` }, { text: "✅ Unblock", callback_data: `unblock_${targetUserId}` }]]
+      }
+    });
+
+  } else if (action === "block") {
+    if (blockUser(targetUserId)) {
+      await api("sendMessage", { 
+        chat_id: targetUserId, 
+        text: `🚫 <b>ACCOUNT SUSPENDED</b>\n\nYou have been blocked by the admin.`, 
+        parse_mode: "HTML", 
+        reply_markup: { remove_keyboard: true } // 🔥 Force remove keyboard on block
+      });
+      await api("answerCallbackQuery", { callback_query_id: cb.id, text: "User Blocked successfully!", show_alert: true });
+    }
+  } else if (action === "unblock") {
+    if (unblockUser(targetUserId)) {
+      setLastTicketStatus(targetUserId, "OPEN");
+      await api("sendMessage", { 
+        chat_id: targetUserId, 
+        text: `✅ <b>ACCOUNT RESTORED</b>\n\nYou have been unblocked by the admin. You can send messages now.`, 
+        parse_mode: "HTML",
+        reply_markup: mainKeyboard // 🔥 Restore keyboard on unblock
+      });
+      await api("answerCallbackQuery", { callback_query_id: cb.id, text: "User Unblocked successfully!", show_alert: true });
+    }
+  }
+}
+
+// ==============================
+// GROUP HANDLER (FOR REPLIES)
 // ==============================
 async function handleGroupMessage(msg) {
   const chatId = msg.chat.id;
@@ -517,40 +531,13 @@ async function handleGroupMessage(msg) {
   const meta = extractMetaFromText(msg.reply_to_message.text || msg.reply_to_message.caption || "");
   if (!meta.userId) return;
 
-  if (text === "/block") {
-    const ok = blockUser(meta.userId);
-    await api("sendMessage", {
-      chat_id: chatId,
-      text: ok ? `🚫 <b>User blocked successfully</b>\nUser ID: <code>${meta.userId}</code>` : `❌ <b>Block failed</b>`,
-      parse_mode: "HTML"
-    });
-    if (ok) await api("sendMessage", { chat_id: meta.userId, text: `🚫 <b>You have been blocked by GOWIN Support.</b>`, parse_mode: "HTML" });
-    return;
-  }
-
-  if (text === "/unblock") {
-    const ok = unblockUser(meta.userId);
-    await api("sendMessage", {
-      chat_id: chatId,
-      text: ok ? `✅ <b>User unblocked successfully</b>\nUser ID: <code>${meta.userId}</code>` : `❌ <b>Unblock failed</b>`,
-      parse_mode: "HTML"
-    });
-    if (ok) {
-      setLastTicketStatus(meta.userId, "OPEN");
-      await api("sendMessage", { chat_id: meta.userId, text: `✅ <b>You have been unblocked.</b>\nYou can send messages now.`, parse_mode: "HTML" });
-    }
-    return;
-  }
-
-  if (text === "/close") {
-    setLastTicketStatus(meta.userId, "CLOSED");
-    await api("sendMessage", { chat_id: chatId, text: `✅ <b>Ticket closed.</b>`, parse_mode: "HTML" });
-    await api("sendMessage", { chat_id: meta.userId, text: `✅ <b>Your support request is now closed.</b>`, parse_mode: "HTML" });
-    return;
+  // Manual commands kept for backup, but buttons will be primarily used now
+  if (text === "/block" || text === "/unblock" || text === "/close") {
+    await api("sendMessage", { chat_id: chatId, text: `💡 <b>Pro Tip:</b> Please use the Inline Buttons under the ticket message instead of typing commands!`, parse_mode: "HTML" });
   }
 
   if (isBlocked(meta.userId)) {
-    await api("sendMessage", { chat_id: chatId, text: `⚠️ This user is blocked. Use /unblock first.`, parse_mode: "HTML" });
+    await api("sendMessage", { chat_id: chatId, text: `⚠️ <b>Action Failed:</b> This user is currently blocked. Click 'Unblock' on their ticket first to reply.`, parse_mode: "HTML" });
     return;
   }
 
@@ -583,7 +570,7 @@ async function startup() {
 }
 
 async function poll() {
-  if (isPolling) return; // 🛠️ FIX: Strict lock prevents double polling overlap
+  if (isPolling) return;
   isPolling = true;
 
   let offset = botState.lastUpdateId ? botState.lastUpdateId + 1 : 0;
@@ -606,6 +593,12 @@ async function poll() {
         botState.lastUpdateId = update.update_id;
         saveState();
         offset = update.update_id + 1;
+
+        // 🔥 Handle Button Clicks (Callback Queries)
+        if (update.callback_query) {
+          await handleCallbackQuery(update.callback_query);
+          continue;
+        }
 
         const msg = update.message;
         if (!msg || msg.from?.is_bot || alreadyProcessedMessage(msg)) continue;
