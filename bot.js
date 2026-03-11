@@ -25,7 +25,6 @@ console.log("🚀 GOWIN Support Bot Started");
 const BLOCK_FILE = "blocked.json";
 const STATE_FILE = "state.json";
 const PROFILE_FILE = "profiles.json";
-const MSG_CACHE_FILE = "processed_messages.json";
 
 // ==============================
 // MEMORY
@@ -33,11 +32,8 @@ const MSG_CACHE_FILE = "processed_messages.json";
 let blockedUsers = new Set();
 let botState = { lastUpdateId: 0 };
 let userProfile = {};
-let processedMessages = {};
-
 const albumBucket = {};
-const runtimeProcessedUpdates = new Set();
-const runtimeProcessedMessages = new Set();
+const processedReplyKeys = new Set();
 
 // ==============================
 // LOAD / SAVE
@@ -83,7 +79,6 @@ function loadData() {
   blockedUsers = loadBlockedUsers();
   botState = loadJson(STATE_FILE, { lastUpdateId: 0 });
   userProfile = loadJson(PROFILE_FILE, {});
-  processedMessages = loadJson(MSG_CACHE_FILE, {});
 }
 
 function saveState() {
@@ -94,49 +89,58 @@ function saveProfiles() {
   saveJson(PROFILE_FILE, userProfile);
 }
 
-function saveProcessedMessages() {
-  saveJson(MSG_CACHE_FILE, processedMessages);
-}
-
 loadData();
 
 // ==============================
 // BLOCK HELPERS
 // ==============================
-function clearUserMessageCache(userId) {
-  const uid = String(userId);
-
-  for (const key of Object.keys(processedMessages)) {
-    if (key.startsWith(`${uid}_`)) {
-      delete processedMessages[key];
-    }
-  }
-
-  for (const key of [...runtimeProcessedMessages]) {
-    if (key.startsWith(`${uid}_`) || key.includes(`_${uid}_`)) {
-      runtimeProcessedMessages.delete(key);
-    }
-  }
-
-  saveProcessedMessages();
-}
-
 function blockUser(userId) {
   const id = Number(userId);
   blockedUsers.add(id);
-  clearUserMessageCache(id);
   return persistBlockedUsers();
 }
 
 function unblockUser(userId) {
   const id = Number(userId);
   blockedUsers.delete(id);
-  clearUserMessageCache(id);
   return persistBlockedUsers();
 }
 
 function isBlocked(userId) {
   return blockedUsers.has(Number(userId));
+}
+
+// ==============================
+// PROFILE HELPERS
+// ==============================
+function setCategory(userId, category) {
+  userProfile[userId] = userProfile[userId] || {};
+  userProfile[userId].category = category;
+  saveProfiles();
+}
+
+function getCategory(userId) {
+  return userProfile[userId]?.category || "GENERAL";
+}
+
+function setLastTicket(userId, ticketId) {
+  userProfile[userId] = userProfile[userId] || {};
+  userProfile[userId].lastTicketId = ticketId;
+  saveProfiles();
+}
+
+function getLastTicket(userId) {
+  return userProfile[userId]?.lastTicketId || null;
+}
+
+function setLastTicketStatus(userId, status) {
+  userProfile[userId] = userProfile[userId] || {};
+  userProfile[userId].lastTicketStatus = status;
+  saveProfiles();
+}
+
+function getLastTicketStatus(userId) {
+  return userProfile[userId]?.lastTicketStatus || "OPEN";
 }
 
 // ==============================
@@ -165,11 +169,6 @@ function escapeHtml(text = "") {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#039;");
-}
-
-function shortText(text, max = 120) {
-  if (!text) return "No text";
-  return text.length > max ? text.slice(0, max) + "..." : text;
 }
 
 function getUserName(msg) {
@@ -208,69 +207,6 @@ async function isGroupAdmin(chatId, userId) {
   return status === "creator" || status === "administrator";
 }
 
-function setCategory(userId, category) {
-  userProfile[userId] = userProfile[userId] || {};
-  userProfile[userId].category = category;
-  saveProfiles();
-}
-
-function getCategory(userId) {
-  return userProfile[userId]?.category || "GENERAL";
-}
-
-function setLastTicket(userId, ticketId) {
-  userProfile[userId] = userProfile[userId] || {};
-  userProfile[userId].lastTicketId = ticketId;
-  saveProfiles();
-}
-
-function getLastTicket(userId) {
-  return userProfile[userId]?.lastTicketId || null;
-}
-
-function getLastTicketStatus(userId) {
-  return userProfile[userId]?.lastTicketStatus || "OPEN";
-}
-
-function setLastTicketStatus(userId, status) {
-  userProfile[userId] = userProfile[userId] || {};
-  userProfile[userId].lastTicketStatus = status;
-  saveProfiles();
-}
-
-function messageKey(msg) {
-  return `${msg.chat.id}_${msg.message_id}`;
-}
-
-function updateKey(update) {
-  return String(update.update_id);
-}
-
-function alreadyProcessedMessage(msg) {
-  const key = messageKey(msg);
-  const now = Date.now();
-
-  if (runtimeProcessedMessages.has(key)) return true;
-  runtimeProcessedMessages.add(key);
-
-  if (processedMessages[key] && now - processedMessages[key] < 86400000) {
-    return true;
-  }
-
-  processedMessages[key] = now;
-
-  const keys = Object.keys(processedMessages);
-  if (keys.length > 5000) {
-    const cutoff = now - 86400000;
-    for (const k of keys) {
-      if (processedMessages[k] < cutoff) delete processedMessages[k];
-    }
-  }
-
-  saveProcessedMessages();
-  return false;
-}
-
 function extractMetaFromText(text = "") {
   const idMatch = text.match(/#ID(\d+)_(\d+)/);
   return {
@@ -279,32 +215,15 @@ function extractMetaFromText(text = "") {
   };
 }
 
+function normalizeText(text = "") {
+  return String(text).trim().replace(/\s+/g, " ");
+}
+
 async function sendTyping(chatId) {
   await api("sendChatAction", {
     chat_id: chatId,
     action: "typing"
   });
-}
-
-function normalizeText(text = "") {
-  return String(text).trim().replace(/\s+/g, " ");
-}
-
-function isStatusButton(text = "") {
-  const t = normalizeText(text).toLowerCase();
-  return (
-    t === normalizeText(BTN_STATUS).toLowerCase() ||
-    t.includes("my ticket status") ||
-    t.includes("ticket status")
-  );
-}
-
-function isHelpButton(text = "") {
-  const t = normalizeText(text).toLowerCase();
-  return (
-    t === normalizeText(BTN_HELP).toLowerCase() ||
-    t.includes("how to submit")
-  );
 }
 
 // ==============================
@@ -327,11 +246,28 @@ const mainKeyboard = {
   one_time_keyboard: false
 };
 
+function isStatusButton(text = "") {
+  const t = normalizeText(text).toLowerCase();
+  return (
+    t === normalizeText(BTN_STATUS).toLowerCase() ||
+    t.includes("my ticket status") ||
+    t.includes("ticket status")
+  );
+}
+
+function isHelpButton(text = "") {
+  const t = normalizeText(text).toLowerCase();
+  return (
+    t === normalizeText(BTN_HELP).toLowerCase() ||
+    t.includes("how to submit")
+  );
+}
+
 function welcomeText(name) {
   return (
     `🎯 <b>WELCOME TO GOWIN SUPPORT</b>\n\n` +
     `Hello <b>${escapeHtml(name)}</b>,\n` +
-    `Please select your problem type from the menu below.\n\n` +
+    `Please select your issue type from the menu below.\n\n` +
     `Our support team will respond as soon as possible.`
   );
 }
@@ -352,38 +288,26 @@ function categoryPrompt(category) {
   const map = {
     DEPOSIT:
       `💳 <b>DEPOSIT SUPPORT</b>\n\n` +
-      `Send:\n` +
-      `1. Game ID\n` +
-      `2. TRX ID\n` +
-      `3. Deposit Amount\n` +
-      `4. Payment Screenshot`,
+      `Send:\n1. Game ID\n2. TRX ID\n3. Deposit Amount\n4. Payment Screenshot`,
 
     WITHDRAW:
       `💸 <b>WITHDRAW SUPPORT</b>\n\n` +
-      `Send:\n` +
-      `1. Game ID\n` +
-      `2. Amount\n` +
-      `3. Method\n` +
-      `4. Screenshot if needed`,
+      `Send:\n1. Game ID\n2. Amount\n3. Method\n4. Screenshot if needed`,
 
     LOGIN:
       `🆔 <b>LOGIN / GAME ID SUPPORT</b>\n\n` +
-      `Send:\n` +
-      `1. Game ID\n` +
-      `2. Problem Description\n` +
-      `3. Screenshot if available`,
+      `Send:\n1. Game ID\n2. Problem Description\n3. Screenshot if available`,
 
     OTHER:
       `🛠 <b>GENERAL SUPPORT</b>\n\n` +
-      `Describe your issue clearly.\n` +
-      `You can also send screenshot, video, or file.`
+      `Describe your issue clearly.\nYou can also send screenshot, video, or file.`
   };
 
   return map[category] || helpText();
 }
 
 // ==============================
-// COMPACT GROUP FORMAT
+// GROUP TICKET FORMAT
 // ==============================
 function buildCompactTicketMessage(msg, category, ticketId, preview) {
   const magicId = makeMagicId(msg.chat.id, msg.message_id);
@@ -395,7 +319,7 @@ function buildCompactTicketMessage(msg, category, ticketId, preview) {
     `👤 ${userLink}\n` +
     `📂 <b>${escapeHtml(category)}</b>\n\n` +
     `💬 <b>Message:</b>\n` +
-    `<blockquote>${escapeHtml(preview)}</blockquote>\n\n` +
+    `<blockquote>${escapeHtml(preview || "No text")}</blockquote>\n\n` +
     `🆔 <code>${magicId}</code>`
   );
 }
@@ -665,7 +589,7 @@ async function handleGroupMessage(msg) {
       chat_id: chatId,
       text: ok
         ? `🚫 <b>User blocked successfully</b>\nUser ID: <code>${meta.userId}</code>`
-        : `❌ <b>Block failed</b>\nCould not save block data.`,
+        : `❌ <b>Block failed</b>`,
       parse_mode: "HTML"
     });
 
@@ -686,13 +610,12 @@ async function handleGroupMessage(msg) {
       chat_id: chatId,
       text: ok
         ? `✅ <b>User unblocked successfully</b>\nUser ID: <code>${meta.userId}</code>`
-        : `❌ <b>Unblock failed</b>\nCould not save unblock data.`,
+        : `❌ <b>Unblock failed</b>`,
       parse_mode: "HTML"
     });
 
     if (ok) {
       setLastTicketStatus(meta.userId, "OPEN");
-
       await api("sendMessage", {
         chat_id: meta.userId,
         text: `✅ <b>You have been unblocked by GOWIN Support.</b>\n\nYou can send messages now.`,
@@ -759,8 +682,8 @@ async function handleGroupMessage(msg) {
   if (!meta.userMsgId) return;
 
   const replyKey = `reply_${chatId}_${msg.message_id}`;
-  if (runtimeProcessedMessages.has(replyKey)) return;
-  runtimeProcessedMessages.add(replyKey);
+  if (processedReplyKeys.has(replyKey)) return;
+  processedReplyKeys.add(replyKey);
 
   await api("copyMessage", {
     chat_id: meta.userId,
@@ -782,13 +705,17 @@ async function handleGroupMessage(msg) {
 async function startup() {
   await api("deleteWebhook", { drop_pending_updates: true });
   blockedUsers = loadBlockedUsers();
+
+  // fresh start হলে old duplicate memory clear
+  botState.lastUpdateId = 0;
+  saveState();
 }
 
 // ==============================
 // POLL
 // ==============================
 async function poll() {
-  let offset = botState.lastUpdateId ? botState.lastUpdateId + 1 : 0;
+  let offset = 0;
 
   while (true) {
     try {
@@ -801,18 +728,13 @@ async function poll() {
       }
 
       for (const update of data.result) {
-        const uKey = updateKey(update);
-        if (runtimeProcessedUpdates.has(uKey)) continue;
-        runtimeProcessedUpdates.add(uKey);
-
+        offset = update.update_id + 1;
         botState.lastUpdateId = update.update_id;
         saveState();
-        offset = update.update_id + 1;
 
         const msg = update.message;
         if (!msg) continue;
         if (msg.from?.is_bot) continue;
-        if (alreadyProcessedMessage(msg)) continue;
 
         if (msg.chat.type === "private") {
           await handlePrivateMessage(msg);
@@ -831,4 +753,3 @@ async function poll() {
   await startup();
   await poll();
 })();
-
