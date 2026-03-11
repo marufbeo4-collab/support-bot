@@ -1,72 +1,48 @@
-const TOKEN = "8620612566:AAG1DqsHR8du4QZUDaP489yszhMczweF5o4"; // আপনার টোকেন দিন
+const TOKEN = "8620612566:AAG1DqsHR8du4QZUDaP489yszhMczweF5o4";
 const API = `https://api.telegram.org/bot${TOKEN}`;
-const MAIN_GROUP_ID = -5184100145; // আপনার এডমিন গ্রুপ আইডি
-const ADMIN_IDS = [123456789]; // আপনার টেলিগ্রাম আইডি
+const MAIN_GROUP_ID = -5184100145;
 
 const http = require("http");
 const fs = require("fs");
 
-// ==============================
-// SERVER FOR RENDER
-// ==============================
 const server = http.createServer((req, res) => {
-  res.writeHead(200, { "Content-Type": "text/plain; charset=utf-8" });
-  res.end("GOWIN Support Bot is active and running...");
+  res.writeHead(200, { "Content-Type": "text/plain" });
+  res.end("GOWIN Support Bot is Running...");
 });
 server.listen(process.env.PORT || 8080);
-console.log("🚀 GOWIN Support Bot Started with TIME-SHIELD Protection!");
+
+console.log("🚀 GOWIN Support Bot Started...");
 
 // ==============================
-// FILES & MEMORY
+// FILES / MEMORY
 // ==============================
 const BLOCK_FILE = "blocked.json";
 let blockedUsers = new Set();
-const runtimeProcessedMessages = new Set();
 const albumBucket = {};
-let lastOffset = 0;
 
 // ==============================
-// LOAD & SAVE BLOCKED USERS
+// LOAD BLOCK LIST
 // ==============================
-function loadBlockedUsers() {
-  try {
-    if (!fs.existsSync(BLOCK_FILE)) return new Set();
-    const data = JSON.parse(fs.readFileSync(BLOCK_FILE, "utf8"));
-    return new Set(Array.isArray(data) ? data.map(Number) : []);
-  } catch {
-    return new Set();
+try {
+  if (fs.existsSync(BLOCK_FILE)) {
+    const data = fs.readFileSync(BLOCK_FILE, "utf8");
+    blockedUsers = new Set(JSON.parse(data));
+    console.log(`🔒 Loaded ${blockedUsers.size} blocked users.`);
   }
+} catch (err) {
+  console.error("⚠️ Error loading blocked list:", err);
 }
 
-function saveBlockedUsers() {
+function saveBlockList() {
   try {
     fs.writeFileSync(BLOCK_FILE, JSON.stringify([...blockedUsers], null, 2));
-  } catch (e) {
-    console.error("Save error:", e.message);
+  } catch (err) {
+    console.error("⚠️ Error saving blocked list:", err);
   }
 }
 
-// Initial Load
-blockedUsers = loadBlockedUsers();
-
-function blockUser(userId) {
-  blockedUsers.add(Number(userId));
-  saveBlockedUsers();
-  return true;
-}
-
-function unblockUser(userId) {
-  blockedUsers.delete(Number(userId));
-  saveBlockedUsers();
-  return true;
-}
-
-function isBlocked(userId) {
-  return blockedUsers.has(Number(userId));
-}
-
 // ==============================
-// API HELPERS
+// HELPERS
 // ==============================
 async function api(method, data = {}) {
   try {
@@ -76,175 +52,443 @@ async function api(method, data = {}) {
       body: JSON.stringify(data),
     });
     return await res.json();
-  } catch (e) { return null; }
+  } catch (e) {
+    console.error(`⚠️ API Error (${method}):`, e.message);
+    return null;
+  }
 }
 
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-function escapeHtml(text = "") { return String(text).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;"); }
-function getUserLink(msg) { return `<a href="tg://user?id=${msg.chat.id}">${escapeHtml(msg.from?.first_name || "User")}</a>`; }
-function makeTicketId() { return "GW" + Date.now().toString().slice(-8); }
-function extractMetaFromText(text = "") {
-  const idMatch = text.match(/#ID(\d+)_(\d+)/);
-  return { userId: idMatch ? Number(idMatch[1]) : null, userMsgId: idMatch ? Number(idMatch[2]) : null };
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+function escapeHtml(text = "") {
+  return String(text)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+}
+
+function getUserName(msg) {
+  const firstName = msg.from?.first_name || "User";
+  const username = msg.from?.username ? ` (@${msg.from.username})` : "";
+  return `${firstName}${username}`;
+}
+
+function getUserLink(msg) {
+  const chatId = msg.chat.id;
+  const fullName = escapeHtml(getUserName(msg));
+  return `<a href="tg://user?id=${chatId}">${fullName}</a>`;
+}
+
+function makeMagicId(chatId, msgId) {
+  return `#ID${chatId}_${msgId}`;
+}
+
+function shortText(text, max = 40) {
+  if (!text) return "Media";
+  return text.length > max ? text.slice(0, max) + "..." : text;
+}
+
+function getReplyContext(msg) {
+  if (!msg.reply_to_message) return "";
+  const rText =
+    msg.reply_to_message.text ||
+    msg.reply_to_message.caption ||
+    "🖼️ Media";
+  return `\n↩️ <b>Reply:</b> <i>${escapeHtml(shortText(rText, 35))}</i>`;
 }
 
 // ==============================
-// MENU & TEXTS
+// MENU BUTTONS
 // ==============================
-const BTN_DEPOSIT = "💳 𝗗𝗘𝗣𝗢𝗦𝗜𝗧 𝗜𝗦𝗦𝗨𝗘";
-const BTN_WITHDRAW = "💸 𝗪𝗜𝗧𝗛𝗗𝗥𝗔𝗪 𝗜𝗦𝗦𝗨𝗘";
-const BTN_LOGIN = "🆔 𝗟𝗢𝗚𝗜𝗡 / 𝗚𝗔𝗠𝗘 𝗜𝗗";
-const BTN_OTHER = "🛠 𝗢𝗧𝗛𝗘𝗥 𝗦𝗨𝗣𝗣𝗢𝗥𝗧";
-const BTN_STATUS = "📌 𝗠𝗬 𝗧𝗜𝗖𝗞𝗘𝗧 𝗦𝗧𝗔𝗧𝗨𝗦";
-const BTN_HELP = "📘 𝗛𝗢𝗪 𝗧𝗢 𝗦𝗨𝗕𝗠𝗜𝗧";
+const CMD_DEPOSIT = "💳 Deposit Problem";
+const CMD_WITHDRAW = "💰 Withdraw Problem";
+const CMD_GAMEID = "🆔 Game ID Problem";
+const CMD_OTHERS = "📩 Other Issues";
 
 const mainKeyboard = {
-  keyboard: [[{ text: BTN_DEPOSIT }, { text: BTN_WITHDRAW }], [{ text: BTN_LOGIN }, { text: BTN_OTHER }], [{ text: BTN_STATUS }, { text: BTN_HELP }]],
-  resize_keyboard: true
+  keyboard: [
+    [{ text: CMD_DEPOSIT }, { text: CMD_WITHDRAW }],
+    [{ text: CMD_GAMEID }, { text: CMD_OTHERS }],
+  ],
+  resize_keyboard: true,
+  one_time_keyboard: false,
 };
 
-function welcomeText(name) { return `🎯 <b>WELCOME TO GOWIN SUPPORT</b>\n\nHello <b>${escapeHtml(name)}</b>,\nPlease select your problem type from the menu below.\n\nOur support team will respond as soon as possible.`; }
+// ==============================
+// PRESET USER MESSAGES
+// ==============================
+const TEXTS = {
+  welcome: (name) =>
+    `🎯 <b>Welcome to GOWIN Support</b>\n\n` +
+    `প্রিয় <b>${escapeHtml(name)}</b>,\n` +
+    `আপনার সমস্যার ধরন নিচের বাটন থেকে নির্বাচন করুন।\n\n` +
+    `📌 আমাদের টিম যত দ্রুত সম্ভব আপনাকে সহায়তা করবে।`,
 
-function getAdminInlineKeyboard(userId) {
-  return { inline_keyboard: [[{ text: "🔒 Close Ticket", callback_data: `close_${userId}` }], [{ text: "🚫 Block User", callback_data: `block_${userId}` }, { text: "✅ Unblock", callback_data: `unblock_${userId}` }]] };
+  deposit:
+    `💳 <b>GOWIN Deposit Support</b>\n\n` +
+    `নিচের তথ্যগুলো একসাথে পাঠান:\n` +
+    `1. <b>Game ID</b>\n` +
+    `2. <b>TRX ID</b>\n` +
+    `3. <b>Payment Screenshot</b>\n\n` +
+    `✅ সব তথ্য সঠিক দিলে দ্রুত সমাধান হবে।`,
+
+  withdraw:
+    `💰 <b>GOWIN Withdraw Support</b>\n\n` +
+    `নিচের তথ্যগুলো পাঠান:\n` +
+    `1. <b>Game ID</b>\n` +
+    `2. <b>Amount</b>\n` +
+    `3. <b>Method</b> (Bkash / Nagad)\n` +
+    `4. প্রয়োজনে <b>Screenshot</b>\n\n` +
+    `✅ সঠিক তথ্য দিন, দ্রুত চেক করা হবে।`,
+
+  gameid:
+    `🆔 <b>GOWIN Game ID Support</b>\n\n` +
+    `আপনার <b>সঠিক Game ID</b> এবং\n` +
+    `সমস্যার <b>স্ক্রিনশট</b> পাঠান।`,
+
+  others:
+    `📩 <b>GOWIN General Support</b>\n\n` +
+    `আপনার সমস্যাটি বিস্তারিত লিখে পাঠান।\n` +
+    `প্রয়োজনে screenshot / video / document ও পাঠাতে পারেন।`,
+
+  blockedUser:
+    `🚫 <b>Access Restricted</b>\n\n` +
+    `আপনাকে বর্তমানে GOWIN Support থেকে block করা হয়েছে।`,
+
+  adminBlocked:
+    `🚫 <b>GOWIN Notice</b>\n\nআপনাকে admin block করেছেন।`,
+
+  adminUnblocked:
+    `✅ <b>GOWIN Notice</b>\n\nআপনাকে admin unblock করেছেন।`,
+};
+
+// ==============================
+// SEND ALBUM GROUP
+// ==============================
+async function sendAlbumGroup(groupId, originalMsg) {
+  const bucket = albumBucket[groupId];
+  if (!bucket || !bucket.messages?.length) return;
+
+  delete albumBucket[groupId];
+
+  const messages = bucket.messages;
+  const firstMsg = bucket.firstMsg;
+  const chatId = firstMsg.chat.id;
+  const userLink = getUserLink(firstMsg);
+  const magicId = makeMagicId(chatId, firstMsg.message_id);
+  const replyContext = getReplyContext(firstMsg);
+
+  const msgWithCaption = messages.find((m) => m.caption);
+  const originalCaption = msgWithCaption ? msgWithCaption.caption : "";
+
+  const media = messages
+    .map((msg, index) => {
+      const caption = index === 0 ? originalCaption : undefined;
+
+      if (msg.photo) {
+        return {
+          type: "photo",
+          media: msg.photo[msg.photo.length - 1].file_id,
+          caption,
+          parse_mode: caption ? "HTML" : undefined,
+        };
+      }
+
+      if (msg.video) {
+        return {
+          type: "video",
+          media: msg.video.file_id,
+          caption,
+          parse_mode: caption ? "HTML" : undefined,
+        };
+      }
+
+      return null;
+    })
+    .filter(Boolean);
+
+  if (media.length > 0) {
+    await api("sendMediaGroup", {
+      chat_id: MAIN_GROUP_ID,
+      media,
+    });
+
+    await api("sendMessage", {
+      chat_id: MAIN_GROUP_ID,
+      text:
+        `🔔 <b>GOWIN Support Request</b>\n\n` +
+        `👤 <b>User:</b> ${userLink}${replyContext}\n` +
+        `🆔 <code>${magicId}</code>\n` +
+        `📎 <b>Sent:</b> Album / Multiple Media`,
+      parse_mode: "HTML",
+    });
+  }
 }
 
 // ==============================
-// MESSAGE HANDLERS
-// ==============================
-async function handlePrivateMessage(msg) {
-  const userId = msg.chat.id;
-  const text = msg.text || "";
-
-  if (isBlocked(userId)) {
-    // Blocked users get nothing, completely ignored to save server load.
-    return; 
-  }
-
-  if (text === "/start") {
-    await api("sendMessage", { chat_id: userId, text: welcomeText(msg.from?.first_name || "User"), parse_mode: "HTML", reply_markup: mainKeyboard });
-    return;
-  }
-
-  // Handle standard buttons
-  const isMenuBtn = [BTN_DEPOSIT, BTN_WITHDRAW, BTN_LOGIN, BTN_OTHER, BTN_STATUS, BTN_HELP].includes(text);
-  
-  if (isMenuBtn) {
-    if (text === BTN_STATUS) {
-      await api("sendMessage", { chat_id: userId, text: `📌 <b>Ticket Status:</b> Your message has been sent to our team. Please wait for a reply.`, parse_mode: "HTML" });
-      return;
-    }
-    if (text === BTN_HELP) {
-      await api("sendMessage", { chat_id: userId, text: `📘 <b>HOW TO SUBMIT PROPERLY</b>\n\nSend:\n• Game ID\n• Problem details\n• Screenshot if available`, parse_mode: "HTML" });
-      return;
-    }
-    await api("sendMessage", { chat_id: userId, text: `✅ <b>Category Selected</b>\n\nPlease type your message or send a screenshot now.`, parse_mode: "HTML" });
-    return;
-  }
-
-  // Forward user message to Admin Group
-  const ticketId = makeTicketId();
-  const magicId = `#ID${userId}_${msg.message_id}`;
-  const header = `🔔 <b>GOWIN TICKET: ${ticketId}</b>\n👤 ${getUserLink(msg)}\n🆔 <code>${magicId}</code>\n\n💬 <b>Message below:</b>`;
-
-  await api("sendMessage", { chat_id: MAIN_GROUP_ID, text: header, parse_mode: "HTML", reply_markup: getAdminInlineKeyboard(userId) });
-  await api("copyMessage", { chat_id: MAIN_GROUP_ID, from_chat_id: userId, message_id: msg.message_id });
-  
-  await api("sendMessage", { chat_id: userId, text: `✅ <b>Support request received!</b>\nTicket: <code>${ticketId}</code>\nOur team will reply shortly.`, parse_mode: "HTML" });
-}
-
-async function handleGroupMessage(msg) {
-  if (msg.chat.id !== MAIN_GROUP_ID || !msg.reply_to_message) return;
-
-  const meta = extractMetaFromText(msg.reply_to_message.text || msg.reply_to_message.caption || "");
-  if (!meta.userId) return;
-
-  if (isBlocked(meta.userId)) {
-    await api("sendMessage", { chat_id: msg.chat.id, text: `⚠️ <b>User is blocked.</b> Unblock first to reply.`, parse_mode: "HTML" });
-    return;
-  }
-
-  if (!meta.userMsgId) return;
-
-  await api("copyMessage", { chat_id: meta.userId, from_chat_id: msg.chat.id, message_id: msg.message_id, reply_to_message_id: meta.userMsgId });
-  await api("setMessageReaction", { chat_id: msg.chat.id, message_id: msg.message_id, reaction: [{ type: "emoji", emoji: "⚡" }] });
-}
-
-async function handleCallbackQuery(cb) {
-  const data = cb.data;
-  const adminGroupId = cb.message?.chat?.id;
-
-  if (adminGroupId !== MAIN_GROUP_ID) return;
-
-  const parts = data.split("_");
-  const action = parts[0];
-  const targetUserId = Number(parts[1]);
-
-  if (action === "close") {
-    await api("sendMessage", { chat_id: targetUserId, text: `✅ <b>Your support request is now closed.</b>`, parse_mode: "HTML" });
-    await api("answerCallbackQuery", { callback_query_id: cb.id, text: "Ticket Closed!" });
-  } else if (action === "block") {
-    blockUser(targetUserId);
-    await api("sendMessage", { chat_id: targetUserId, text: `🚫 <b>ACCOUNT SUSPENDED</b>\n\nYou have been blocked.`, parse_mode: "HTML", reply_markup: { remove_keyboard: true } });
-    await api("answerCallbackQuery", { callback_query_id: cb.id, text: "User Blocked!", show_alert: true });
-  } else if (action === "unblock") {
-    unblockUser(targetUserId);
-    await api("sendMessage", { chat_id: targetUserId, text: `✅ <b>ACCOUNT RESTORED</b>\nYou can send messages now.`, parse_mode: "HTML", reply_markup: mainKeyboard });
-    await api("answerCallbackQuery", { callback_query_id: cb.id, text: "User Unblocked!", show_alert: true });
-  }
-}
-
-// ==============================
-// 🔥 BULLETPROOF POLLING (ANTI-DOUBLE MSG SHIELD)
+// MAIN POLL LOOP
 // ==============================
 async function poll() {
-  await api("deleteWebhook", { drop_pending_updates: true }); // Clear all old stuck messages immediately
-  
+  let offset = 0;
+
   while (true) {
     try {
-      const res = await fetch(`${API}/getUpdates?timeout=30&offset=${lastOffset}`);
+      const res = await fetch(`${API}/getUpdates?timeout=30&offset=${offset}`);
       const data = await res.json();
 
-      if (!data.ok || !data.result || data.result.length === 0) {
-        await sleep(1500);
+      if (!data.ok) {
+        await sleep(4000);
         continue;
       }
 
-      // INSTANTLY update offset so Telegram NEVER sends these again
-      lastOffset = data.result[data.result.length - 1].update_id + 1;
-
       for (const update of data.result) {
-        if (update.callback_query) { 
-          await handleCallbackQuery(update.callback_query); 
-          continue; 
-        }
-        
+        offset = update.update_id + 1;
         const msg = update.message;
-        if (!msg || msg.from?.is_bot) continue;
+        if (!msg) continue;
+        if (msg.from?.is_bot) continue;
 
-        // 🔥 THE MAGIC SHIELD: Anti-Ghost & Anti-Restart Spam
-        // যদি মেসেজটা ৬০ সেকেন্ডের বেশি পুরনো হয়, ডাইরেক্ট রিজেক্ট! 
-        const msgTimeSeconds = msg.date;
-        const currentServerTimeSeconds = Math.floor(Date.now() / 1000);
-        
-        if (currentServerTimeSeconds - msgTimeSeconds > 60) {
-          console.log("Old message blocked by shield:", msg.text);
-          continue; // কোড এখানেই থেমে যাবে, কোনো রিপ্লাই দেবে না
+        const chatId = msg.chat.id;
+        const text = msg.text || msg.caption || "";
+        const isPrivate = msg.chat.type === "private";
+        const isGroup =
+          msg.chat.type === "group" || msg.chat.type === "supergroup";
+
+        // ==============================
+        // BLOCK CHECK
+        // ==============================
+        if (isPrivate && blockedUsers.has(chatId)) {
+          await api("sendMessage", {
+            chat_id: chatId,
+            text: TEXTS.blockedUser,
+            parse_mode: "HTML",
+          });
+          continue;
         }
 
-        // RAM Cache Lock
-        const key = `${msg.chat.id}_${msg.message_id}`;
-        if (runtimeProcessedMessages.has(key)) continue;
-        runtimeProcessedMessages.add(key);
+        // ==============================
+        // GROUP SIDE
+        // ==============================
+        if (isGroup) {
+          if (text === "/id") {
+            await api("sendMessage", {
+              chat_id: chatId,
+              text: `🆔 <b>Group ID:</b> <code>${chatId}</code>`,
+              parse_mode: "HTML",
+            });
+            continue;
+          }
 
-        if (msg.chat.type === "private") {
-          await handlePrivateMessage(msg);
-        } else if (msg.chat.type === "group" || msg.chat.type === "supergroup") {
-          await handleGroupMessage(msg);
+          // Admin block/unblock only in main group and replying to forwarded support tag
+          if (chatId === MAIN_GROUP_ID && msg.reply_to_message) {
+            const repliedText =
+              msg.reply_to_message.text || msg.reply_to_message.caption || "";
+            const match = repliedText.match(/#ID(\d+)_/);
+
+            if (match) {
+              const targetUserId = Number(match[1]);
+
+              if (text === "/block") {
+                blockedUsers.add(targetUserId);
+                saveBlockList();
+
+                await api("sendMessage", {
+                  chat_id: chatId,
+                  text:
+                    `🚫 <b>Blocked Successfully</b>\n\n` +
+                    `User ID: <code>${targetUserId}</code>`,
+                  parse_mode: "HTML",
+                });
+
+                await api("sendMessage", {
+                  chat_id: targetUserId,
+                  text: TEXTS.adminBlocked,
+                  parse_mode: "HTML",
+                });
+                continue;
+              }
+
+              if (text === "/unblock") {
+                blockedUsers.delete(targetUserId);
+                saveBlockList();
+
+                await api("sendMessage", {
+                  chat_id: chatId,
+                  text:
+                    `✅ <b>Unblocked Successfully</b>\n\n` +
+                    `User ID: <code>${targetUserId}</code>`,
+                  parse_mode: "HTML",
+                });
+
+                await api("sendMessage", {
+                  chat_id: targetUserId,
+                  text: TEXTS.adminUnblocked,
+                  parse_mode: "HTML",
+                });
+                continue;
+              }
+            }
+          }
+
+          // Natural admin reply to user
+          if (chatId === MAIN_GROUP_ID && msg.reply_to_message) {
+            const repliedText =
+              msg.reply_to_message.text || msg.reply_to_message.caption || "";
+            const match = repliedText.match(/#ID(\d+)_(\d+)/);
+
+            if (match) {
+              const userId = Number(match[1]);
+              const userMsgId = Number(match[2]);
+
+              if (blockedUsers.has(userId)) {
+                await api("sendMessage", {
+                  chat_id: chatId,
+                  text:
+                    `⚠️ <b>This user is currently blocked.</b>\n` +
+                    `Unblock first to reply.`,
+                  parse_mode: "HTML",
+                });
+                continue;
+              }
+
+              const sent = await api("copyMessage", {
+                chat_id: userId,
+                from_chat_id: chatId,
+                message_id: msg.message_id,
+                reply_to_message_id: userMsgId,
+              });
+
+              if (sent && sent.ok) {
+                await api("setMessageReaction", {
+                  chat_id: chatId,
+                  message_id: msg.message_id,
+                  reaction: [{ type: "emoji", emoji: "⚡" }],
+                });
+              }
+            }
+          }
+
+          continue;
+        }
+
+        // ==============================
+        // USER SIDE
+        // ==============================
+        if (isPrivate) {
+          const firstName = msg.from?.first_name || "User";
+
+          if (text === "/start") {
+            await api("sendMessage", {
+              chat_id: chatId,
+              text: TEXTS.welcome(firstName),
+              parse_mode: "HTML",
+              reply_markup: mainKeyboard,
+            });
+            continue;
+          }
+
+          if (text === CMD_DEPOSIT) {
+            await api("sendMessage", {
+              chat_id: chatId,
+              text: TEXTS.deposit,
+              parse_mode: "HTML",
+            });
+            continue;
+          }
+
+          if (text === CMD_WITHDRAW) {
+            await api("sendMessage", {
+              chat_id: chatId,
+              text: TEXTS.withdraw,
+              parse_mode: "HTML",
+            });
+            continue;
+          }
+
+          if (text === CMD_GAMEID) {
+            await api("sendMessage", {
+              chat_id: chatId,
+              text: TEXTS.gameid,
+              parse_mode: "HTML",
+            });
+            continue;
+          }
+
+          if (text === CMD_OTHERS) {
+            await api("sendMessage", {
+              chat_id: chatId,
+              text: TEXTS.others,
+              parse_mode: "HTML",
+            });
+            continue;
+          }
+
+          // Album handling
+          if (msg.media_group_id) {
+            const groupId = msg.media_group_id;
+
+            if (!albumBucket[groupId]) {
+              albumBucket[groupId] = {
+                firstMsg: msg,
+                messages: [],
+                timer: setTimeout(() => sendAlbumGroup(groupId, msg), 2500),
+              };
+            }
+
+            albumBucket[groupId].messages.push(msg);
+            continue;
+          }
+
+          // Single message forward/copy to admin group
+          const userLink = getUserLink(msg);
+          const magicId = makeMagicId(chatId, msg.message_id);
+          const replyContext = getReplyContext(msg);
+
+          if (text && !msg.photo && !msg.video && !msg.voice && !msg.document) {
+            await api("sendMessage", {
+              chat_id: MAIN_GROUP_ID,
+              text:
+                `🔔 <b>GOWIN Support Request</b>\n\n` +
+                `👤 <b>User:</b> ${userLink}${replyContext}\n\n` +
+                `📝 <b>Message:</b>\n${escapeHtml(text)}\n\n` +
+                `🆔 <code>${magicId}</code>`,
+              parse_mode: "HTML",
+              disable_web_page_preview: true,
+            });
+          } else {
+            await api("copyMessage", {
+              chat_id: MAIN_GROUP_ID,
+              from_chat_id: chatId,
+              message_id: msg.message_id,
+            });
+
+            await api("sendMessage", {
+              chat_id: MAIN_GROUP_ID,
+              text:
+                `🔔 <b>GOWIN Support Request</b>\n\n` +
+                `👤 <b>User:</b> ${userLink}${replyContext}\n` +
+                `📎 <b>Sent:</b> Media / File\n` +
+                `🆔 <code>${magicId}</code>`,
+              parse_mode: "HTML",
+            });
+          }
+
+          // Optional confirmation to user
+          await api("sendMessage", {
+            chat_id: chatId,
+            text:
+              `✅ <b>GOWIN Support Received Your Message</b>\n\n` +
+              `আমাদের টিম আপনার message পেয়েছে। একটু অপেক্ষা করুন।`,
+            parse_mode: "HTML",
+          });
+
+          continue;
         }
       }
-    } catch (e) {
-      await sleep(2000);
+    } catch (err) {
+      console.error("🔥 Polling Error:", err.message);
+      await sleep(3000);
     }
   }
 }
