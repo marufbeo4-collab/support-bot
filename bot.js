@@ -1,10 +1,6 @@
 const TOKEN = "8620612566:AAEUrh1-gK4oW1KiH1QHhxRuL_RMGQcmTUY";
 const API = `https://api.telegram.org/bot${TOKEN}`;
-
 const MAIN_GROUP_ID = -5184100145;
-
-// Put your Telegram user ID(s) here
-const ADMIN_IDS = [123456789];
 
 const http = require("http");
 const fs = require("fs");
@@ -17,26 +13,25 @@ server.listen(process.env.PORT || 8080);
 
 console.log("🚀 GOWIN Support Bot Started");
 
-// =========================
+// ==========================
 // FILES
-// =========================
+// ==========================
 const BLOCK_FILE = "blocked.json";
 const STATE_FILE = "state.json";
+const PROFILE_FILE = "profiles.json";
 const TICKET_FILE = "tickets.json";
 
 let blockedUsers = new Set();
-let botState = {
-  lastUpdateId: 0
-};
-
-let tickets = {}; // ticketId -> { userId, status, category, createdAt, lastMsgId }
-let userProfile = {}; // userId -> { category, lastTicketId }
+let botState = { lastUpdateId: 0 };
+let userProfile = {};
+let tickets = {};
 let albumBucket = {};
-let recentMessageGuard = new Map(); // anti-duplicate short-term guard
+let recentGuard = new Map();
+let blockedNoticeCooldown = new Map();
 
-// =========================
+// ==========================
 // LOAD / SAVE
-// =========================
+// ==========================
 function loadJson(file, fallback) {
   try {
     if (!fs.existsSync(file)) return fallback;
@@ -50,15 +45,14 @@ function saveJson(file, data) {
   try {
     fs.writeFileSync(file, JSON.stringify(data, null, 2));
   } catch (e) {
-    console.error(`Failed to save ${file}:`, e.message);
+    console.error(`Save error (${file}):`, e.message);
   }
 }
 
 function loadData() {
-  const blocked = loadJson(BLOCK_FILE, []);
-  blockedUsers = new Set(blocked);
-
+  blockedUsers = new Set(loadJson(BLOCK_FILE, []));
   botState = loadJson(STATE_FILE, { lastUpdateId: 0 });
+  userProfile = loadJson(PROFILE_FILE, {});
   tickets = loadJson(TICKET_FILE, {});
 }
 
@@ -70,21 +64,25 @@ function saveState() {
   saveJson(STATE_FILE, botState);
 }
 
+function saveProfiles() {
+  saveJson(PROFILE_FILE, userProfile);
+}
+
 function saveTickets() {
   saveJson(TICKET_FILE, tickets);
 }
 
 loadData();
 
-// =========================
-// HELPERS
-// =========================
+// ==========================
+// API / HELPERS
+// ==========================
 async function api(method, data = {}) {
   try {
     const res = await fetch(`${API}/${method}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(data)
+      body: JSON.stringify(data),
     });
     return await res.json();
   } catch (e) {
@@ -104,18 +102,19 @@ function escapeHtml(text = "") {
     .replace(/'/g, "&#039;");
 }
 
-function isAdmin(userId) {
-  return ADMIN_IDS.includes(userId);
+function shortText(text, max = 120) {
+  if (!text) return "Media/File";
+  return text.length > max ? text.slice(0, max) + "..." : text;
 }
 
-function getUserLabel(msg) {
+function getUserName(msg) {
   const firstName = msg.from?.first_name || "User";
   const username = msg.from?.username ? ` (@${msg.from.username})` : "";
   return `${firstName}${username}`;
 }
 
 function getUserLink(msg) {
-  return `<a href="tg://user?id=${msg.chat.id}">${escapeHtml(getUserLabel(msg))}</a>`;
+  return `<a href="tg://user?id=${msg.chat.id}">${escapeHtml(getUserName(msg))}</a>`;
 }
 
 function makeMagicId(userId, msgId) {
@@ -126,23 +125,10 @@ function makeTicketId() {
   return "GW" + Date.now().toString().slice(-8);
 }
 
-function shortText(text, max = 40) {
-  if (!text) return "Media/File";
-  return text.length > max ? text.slice(0, max) + "..." : text;
-}
-
-function getReplyContext(msg) {
-  if (!msg.reply_to_message) return "";
-  const t =
-    msg.reply_to_message.text ||
-    msg.reply_to_message.caption ||
-    "Media/File";
-  return `\n↩️ <b>Reply To:</b> <i>${escapeHtml(shortText(t, 35))}</i>`;
-}
-
 function setCategory(userId, category) {
   userProfile[userId] = userProfile[userId] || {};
   userProfile[userId].category = category;
+  saveProfiles();
 }
 
 function getCategory(userId) {
@@ -152,33 +138,58 @@ function getCategory(userId) {
 function setLastTicket(userId, ticketId) {
   userProfile[userId] = userProfile[userId] || {};
   userProfile[userId].lastTicketId = ticketId;
+  saveProfiles();
 }
 
 function getLastTicket(userId) {
   return userProfile[userId]?.lastTicketId || null;
 }
 
-function messageFingerprint(msg) {
-  const text = msg.text || msg.caption || "";
-  const mediaGroup = msg.media_group_id || "";
-  return `${msg.chat.id}:${msg.message_id}:${text}:${mediaGroup}`;
+function createTicket(userId, category, msgId) {
+  const ticketId = makeTicketId();
+  tickets[ticketId] = {
+    userId,
+    category,
+    status: "OPEN",
+    createdAt: Date.now(),
+    lastMsgId: msgId
+  };
+  setLastTicket(userId, ticketId);
+  saveTickets();
+  return ticketId;
 }
 
-function isDuplicateMessage(msg) {
+function setTicketStatus(ticketId, status) {
+  if (!ticketId || !tickets[ticketId]) return false;
+  tickets[ticketId].status = status;
+  saveTickets();
+  return true;
+}
+
+function getLastTicketInfo(userId) {
+  const ticketId = getLastTicket(userId);
+  if (!ticketId || !tickets[ticketId]) return null;
+  return { ticketId, ...tickets[ticketId] };
+}
+
+function messageFingerprint(msg) {
+  const body = msg.text || msg.caption || "";
+  return `${msg.chat.id}:${msg.message_id}:${msg.media_group_id || ""}:${body}`;
+}
+
+function isDuplicate(msg) {
   const key = messageFingerprint(msg);
   const now = Date.now();
-  const prev = recentMessageGuard.get(key);
+  const prev = recentGuard.get(key);
 
   if (prev && now - prev < 15000) return true;
 
-  recentMessageGuard.set(key, now);
+  recentGuard.set(key, now);
 
-  // cleanup
-  if (recentMessageGuard.size > 500) {
-    const entries = [...recentMessageGuard.entries()];
+  if (recentGuard.size > 500) {
     const cutoff = now - 30000;
-    for (const [k, v] of entries) {
-      if (v < cutoff) recentMessageGuard.delete(k);
+    for (const [k, v] of recentGuard.entries()) {
+      if (v < cutoff) recentGuard.delete(k);
     }
   }
 
@@ -189,9 +200,25 @@ async function sendTyping(chatId) {
   await api("sendChatAction", { chat_id: chatId, action: "typing" });
 }
 
-// =========================
-// MENU - FEWER + CLEANER
-// =========================
+async function isGroupAdmin(chatId, userId) {
+  const res = await api("getChatMember", {
+    chat_id: chatId,
+    user_id: userId
+  });
+
+  if (!res || !res.ok) return false;
+
+  const status = res.result?.status;
+  return status === "creator" || status === "administrator";
+}
+
+function quotedBlock(text) {
+  return `<blockquote>${escapeHtml(shortText(text, 300))}</blockquote>`;
+}
+
+// ==========================
+// MENU
+// ==========================
 const BTN_DEPOSIT = "Deposit Issue";
 const BTN_WITHDRAW = "Withdraw Issue";
 const BTN_LOGIN = "Login / Game ID Issue";
@@ -213,24 +240,24 @@ function welcomeText(name) {
   return (
     `🎯 <b>Welcome to GOWIN Official Support</b>\n\n` +
     `Hello <b>${escapeHtml(name)}</b>,\n` +
-    `Choose the correct issue type from the menu below.\n\n` +
-    `Our team will review your request and reply as soon as possible.`
+    `Please choose your issue type from the menu below.\n\n` +
+    `Our team will review and respond as soon as possible.`
   );
 }
 
-function guideText() {
+function helpText() {
   return (
     `📘 <b>How To Submit Properly</b>\n\n` +
-    `Please send these details clearly:\n` +
+    `Please send:\n` +
     `• Game ID\n` +
-    `• Short problem description\n` +
-    `• TRX ID (if payment related)\n` +
+    `• Short issue description\n` +
+    `• TRX ID if payment related\n` +
     `• Screenshot / proof if available\n\n` +
-    `✅ Clear information = faster support`
+    `✅ Clear details help us solve faster.`
   );
 }
 
-function categoryText(category) {
+function categoryPrompt(category) {
   const map = {
     "Deposit": (
       `💳 <b>Deposit Support</b>\n\n` +
@@ -257,52 +284,47 @@ function categoryText(category) {
     ),
     "Other": (
       `📝 <b>General Support</b>\n\n` +
-      `Please describe your issue clearly.\n` +
-      `You can also send screenshot, video, or file.`
+      `Please describe the issue clearly.\n` +
+      `You may also send screenshot, video, or file.`
     )
   };
 
-  return map[category] || guideText();
+  return map[category] || helpText();
 }
 
-// =========================
-// TICKET FUNCTIONS
-// =========================
-function createTicket(userId, category, msgId) {
-  const ticketId = makeTicketId();
-  tickets[ticketId] = {
-    userId,
-    status: "OPEN",
-    category,
-    createdAt: Date.now(),
-    lastMsgId: msgId
-  };
-  setLastTicket(userId, ticketId);
-  saveTickets();
-  return ticketId;
+// ==========================
+// MESSAGE FORMATTERS
+// ==========================
+function buildMarkerMessage({ msg, ticketId, category, contentType = "Text", preview = "" }) {
+  const userId = msg.chat.id;
+  const magicId = makeMagicId(userId, msg.message_id);
+  const userLink = getUserLink(msg);
+
+  return (
+    `🔔 <b>GOWIN New Ticket</b>\n\n` +
+    `🎟️ <b>Ticket:</b> <code>${ticketId}</code>\n` +
+    `👤 <b>User:</b> ${userLink}\n` +
+    `📂 <b>Category:</b> ${escapeHtml(category)}\n` +
+    `📎 <b>Type:</b> ${escapeHtml(contentType)}\n\n` +
+    `${preview ? `<b>Preview:</b>\n${preview}\n\n` : ""}` +
+    `🆔 <code>${magicId}</code>`
+  );
 }
 
-function setTicketStatus(ticketId, status) {
-  if (!tickets[ticketId]) return false;
-  tickets[ticketId].status = status;
-  saveTickets();
-  return true;
-}
+function extractMetaFromMarker(text = "") {
+  const idMatch = text.match(/#ID(\d+)_(\d+)/);
+  const ticketMatch = text.match(/Ticket:<\/b>\s*<code>(GW\d+)<\/code>/);
 
-function getTicketStatusByUser(userId) {
-  const lastTicket = getLastTicket(userId);
-  if (!lastTicket || !tickets[lastTicket]) {
-    return null;
-  }
   return {
-    ticketId: lastTicket,
-    ...tickets[lastTicket]
+    userId: idMatch ? Number(idMatch[1]) : null,
+    userMsgId: idMatch ? Number(idMatch[2]) : null,
+    ticketId: ticketMatch ? ticketMatch[1] : null
   };
 }
 
-// =========================
-// ALBUM HANDLER
-// =========================
+// ==========================
+// ALBUM
+// ==========================
 async function sendAlbumGroup(groupId) {
   const bucket = albumBucket[groupId];
   if (!bucket || !bucket.messages?.length) return;
@@ -313,12 +335,9 @@ async function sendAlbumGroup(groupId) {
   const userId = firstMsg.chat.id;
   const category = getCategory(userId);
   const ticketId = createTicket(userId, category, firstMsg.message_id);
-  const userLink = getUserLink(firstMsg);
-  const magicId = makeMagicId(userId, firstMsg.message_id);
-  const replyContext = getReplyContext(firstMsg);
 
   const msgWithCaption = bucket.messages.find((m) => m.caption);
-  const originalCaption = msgWithCaption ? msgWithCaption.caption : "";
+  const originalCaption = msgWithCaption?.caption || "";
 
   const media = bucket.messages.map((m, index) => {
     const caption = index === 0 && originalCaption ? originalCaption : undefined;
@@ -330,6 +349,7 @@ async function sendAlbumGroup(groupId) {
         caption
       };
     }
+
     if (m.video) {
       return {
         type: "video",
@@ -337,6 +357,7 @@ async function sendAlbumGroup(groupId) {
         caption
       };
     }
+
     return null;
   }).filter(Boolean);
 
@@ -345,22 +366,24 @@ async function sendAlbumGroup(groupId) {
     media
   });
 
+  const preview = originalCaption ? quotedBlock(originalCaption) : quotedBlock("Album / Multiple Media");
+
   await api("sendMessage", {
     chat_id: MAIN_GROUP_ID,
-    text:
-      `🔔 <b>GOWIN New Ticket</b>\n\n` +
-      `🎟️ <b>Ticket:</b> <code>${ticketId}</code>\n` +
-      `👤 <b>User:</b> ${userLink}\n` +
-      `📂 <b>Category:</b> ${escapeHtml(category)}${replyContext}\n` +
-      `📎 <b>Type:</b> Album / Media Group\n` +
-      `🆔 <code>${magicId}</code>`,
+    text: buildMarkerMessage({
+      msg: firstMsg,
+      ticketId,
+      category,
+      contentType: "Album / Media Group",
+      preview
+    }),
     parse_mode: "HTML"
   });
 
   await api("sendMessage", {
     chat_id: userId,
     text:
-      `✅ <b>Message received</b>\n\n` +
+      `✅ <b>Support request received</b>\n\n` +
       `Ticket: <code>${ticketId}</code>\n` +
       `Category: <b>${escapeHtml(category)}</b>\n` +
       `Status: <b>OPEN</b>`,
@@ -368,38 +391,25 @@ async function sendAlbumGroup(groupId) {
   });
 }
 
-// =========================
-// ADMIN PANEL HELP
-// =========================
-function adminHelpText() {
-  return (
-    `🛠️ <b>GOWIN Admin Controls</b>\n\n` +
-    `Reply to a ticket marker message with:\n` +
-    `• <code>/block</code>\n` +
-    `• <code>/unblock</code>\n` +
-    `• <code>/close</code>\n` +
-    `• <code>/pending</code>\n` +
-    `• <code>/open</code>\n\n` +
-    `Also available:\n` +
-    `• <code>/id</code>\n` +
-    `• <code>/panel</code>`
-  );
-}
-
-// =========================
-// STARTUP SAFETY
-// =========================
-async function startup() {
-  // If webhook was set before, remove it
-  await api("deleteWebhook", { drop_pending_updates: false });
-}
-
+// ==========================
+// PRIVATE SIDE
+// ==========================
 async function handlePrivateMessage(msg) {
   const userId = msg.chat.id;
   const text = msg.text || msg.caption || "";
 
   if (blockedUsers.has(userId)) {
-    // silently ignore
+    const last = blockedNoticeCooldown.get(userId) || 0;
+    const now = Date.now();
+
+    if (now - last > 300000) {
+      blockedNoticeCooldown.set(userId, now);
+      await api("sendMessage", {
+        chat_id: userId,
+        text: `🚫 <b>Your access to GOWIN Support is restricted.</b>`,
+        parse_mode: "HTML"
+      });
+    }
     return;
   }
 
@@ -418,7 +428,7 @@ async function handlePrivateMessage(msg) {
     setCategory(userId, "Deposit");
     await api("sendMessage", {
       chat_id: userId,
-      text: categoryText("Deposit"),
+      text: categoryPrompt("Deposit"),
       parse_mode: "HTML"
     });
     return;
@@ -428,7 +438,7 @@ async function handlePrivateMessage(msg) {
     setCategory(userId, "Withdraw");
     await api("sendMessage", {
       chat_id: userId,
-      text: categoryText("Withdraw"),
+      text: categoryPrompt("Withdraw"),
       parse_mode: "HTML"
     });
     return;
@@ -438,7 +448,7 @@ async function handlePrivateMessage(msg) {
     setCategory(userId, "Login / Game ID");
     await api("sendMessage", {
       chat_id: userId,
-      text: categoryText("Login / Game ID"),
+      text: categoryPrompt("Login / Game ID"),
       parse_mode: "HTML"
     });
     return;
@@ -448,7 +458,7 @@ async function handlePrivateMessage(msg) {
     setCategory(userId, "Other");
     await api("sendMessage", {
       chat_id: userId,
-      text: categoryText("Other"),
+      text: categoryPrompt("Other"),
       parse_mode: "HTML"
     });
     return;
@@ -457,21 +467,21 @@ async function handlePrivateMessage(msg) {
   if (text === BTN_HELP) {
     await api("sendMessage", {
       chat_id: userId,
-      text: guideText(),
+      text: helpText(),
       parse_mode: "HTML"
     });
     return;
   }
 
   if (text === BTN_STATUS) {
-    const info = getTicketStatusByUser(userId);
+    const info = getLastTicketInfo(userId);
 
     if (!info) {
       await api("sendMessage", {
         chat_id: userId,
         text:
-          `📌 <b>No recent ticket found</b>\n\n` +
-          `Please select an issue type and send your message first.`,
+          `📌 <b>No recent ticket found.</b>\n\n` +
+          `Please choose an issue type and send your message first.`,
         parse_mode: "HTML"
       });
       return;
@@ -491,6 +501,7 @@ async function handlePrivateMessage(msg) {
 
   if (msg.media_group_id) {
     const groupId = msg.media_group_id;
+
     if (!albumBucket[groupId]) {
       albumBucket[groupId] = {
         firstMsg: msg,
@@ -498,26 +509,26 @@ async function handlePrivateMessage(msg) {
         timer: setTimeout(() => sendAlbumGroup(groupId), 2200)
       };
     }
+
     albumBucket[groupId].messages.push(msg);
     return;
   }
 
   const category = getCategory(userId);
   const ticketId = createTicket(userId, category, msg.message_id);
-  const userLink = getUserLink(msg);
-  const magicId = makeMagicId(userId, msg.message_id);
-  const replyContext = getReplyContext(msg);
 
   if (text && !msg.photo && !msg.video && !msg.voice && !msg.document) {
+    const preview = quotedBlock(text);
+
     await api("sendMessage", {
       chat_id: MAIN_GROUP_ID,
-      text:
-        `🔔 <b>GOWIN New Ticket</b>\n\n` +
-        `🎟️ <b>Ticket:</b> <code>${ticketId}</code>\n` +
-        `👤 <b>User:</b> ${userLink}\n` +
-        `📂 <b>Category:</b> ${escapeHtml(category)}${replyContext}\n\n` +
-        `📝 <b>Message:</b>\n${escapeHtml(text)}\n\n` +
-        `🆔 <code>${magicId}</code>`,
+      text: buildMarkerMessage({
+        msg,
+        ticketId,
+        category,
+        contentType: "Text",
+        preview
+      }),
       parse_mode: "HTML",
       disable_web_page_preview: true
     });
@@ -528,15 +539,18 @@ async function handlePrivateMessage(msg) {
       message_id: msg.message_id
     });
 
+    const mediaText = msg.caption || "Media / File";
+    const preview = quotedBlock(mediaText);
+
     await api("sendMessage", {
       chat_id: MAIN_GROUP_ID,
-      text:
-        `🔔 <b>GOWIN New Ticket</b>\n\n` +
-        `🎟️ <b>Ticket:</b> <code>${ticketId}</code>\n` +
-        `👤 <b>User:</b> ${userLink}\n` +
-        `📂 <b>Category:</b> ${escapeHtml(category)}${replyContext}\n` +
-        `📎 <b>Type:</b> Media / File\n` +
-        `🆔 <code>${magicId}</code>`,
+      text: buildMarkerMessage({
+        msg,
+        ticketId,
+        category,
+        contentType: "Media / File",
+        preview
+      }),
       parse_mode: "HTML"
     });
   }
@@ -552,6 +566,9 @@ async function handlePrivateMessage(msg) {
   });
 }
 
+// ==========================
+// GROUP SIDE
+// ==========================
 async function handleGroupMessage(msg) {
   const chatId = msg.chat.id;
   const text = msg.text || "";
@@ -566,130 +583,133 @@ async function handleGroupMessage(msg) {
     return;
   }
 
-  if (chatId === MAIN_GROUP_ID && text === "/panel") {
-    if (!isAdmin(senderId)) return;
-    await api("sendMessage", {
-      chat_id: chatId,
-      text: adminHelpText(),
-      parse_mode: "HTML"
-    });
-    return;
-  }
-
   if (chatId !== MAIN_GROUP_ID || !msg.reply_to_message) return;
 
-  const repliedText =
-    msg.reply_to_message.text ||
-    msg.reply_to_message.caption ||
-    "";
+  const originalText = msg.reply_to_message.text || msg.reply_to_message.caption || "";
+  const meta = extractMetaFromMarker(originalText);
 
-  const userMatch = repliedText.match(/#ID(\d+)_(\d+)/);
-  const ticketMatch = repliedText.match(/Ticket:<\/b> <code>(GW\d+)<\/code>/);
+  if (!meta.userId) return;
 
-  const targetUserId = userMatch ? Number(userMatch[1]) : null;
-  const targetMsgId = userMatch ? Number(userMatch[2]) : null;
-  const ticketId = ticketMatch ? ticketMatch[1] : null;
-
-  if (!targetUserId) return;
+  const admin = await isGroupAdmin(chatId, senderId);
+  if (!admin) return;
 
   if (text === "/block") {
-    if (!isAdmin(senderId)) return;
-    blockedUsers.add(targetUserId);
+    blockedUsers.add(meta.userId);
     saveBlocked();
+
+    if (meta.ticketId) setTicketStatus(meta.ticketId, "BLOCKED");
 
     await api("sendMessage", {
       chat_id: chatId,
-      text: `🚫 User <code>${targetUserId}</code> blocked.`,
+      text:
+        `🚫 <b>User blocked successfully</b>\n\n` +
+        `User ID: <code>${meta.userId}</code>` +
+        (meta.ticketId ? `\nTicket: <code>${meta.ticketId}</code>` : ""),
+      parse_mode: "HTML"
+    });
+
+    await api("sendMessage", {
+      chat_id: meta.userId,
+      text: `🚫 <b>You have been blocked by GOWIN Support.</b>`,
       parse_mode: "HTML"
     });
     return;
   }
 
   if (text === "/unblock") {
-    if (!isAdmin(senderId)) return;
-    blockedUsers.delete(targetUserId);
+    blockedUsers.delete(meta.userId);
     saveBlocked();
+
+    if (meta.ticketId) setTicketStatus(meta.ticketId, "OPEN");
 
     await api("sendMessage", {
       chat_id: chatId,
-      text: `✅ User <code>${targetUserId}</code> unblocked.`,
+      text:
+        `✅ <b>User unblocked successfully</b>\n\n` +
+        `User ID: <code>${meta.userId}</code>` +
+        (meta.ticketId ? `\nTicket: <code>${meta.ticketId}</code>` : ""),
+      parse_mode: "HTML"
+    });
+
+    await api("sendMessage", {
+      chat_id: meta.userId,
+      text: `✅ <b>You have been unblocked by GOWIN Support.</b>`,
       parse_mode: "HTML"
     });
     return;
   }
 
   if (text === "/close") {
-    if (!isAdmin(senderId)) return;
-    if (ticketId) setTicketStatus(ticketId, "CLOSED");
+    if (meta.ticketId) setTicketStatus(meta.ticketId, "CLOSED");
 
     await api("sendMessage", {
       chat_id: chatId,
-      text: ticketId
-        ? `✅ Ticket <code>${ticketId}</code> closed.`
-        : `✅ Marked as closed.`,
+      text: meta.ticketId
+        ? `✅ Ticket <code>${meta.ticketId}</code> closed.`
+        : `✅ Ticket closed.`,
       parse_mode: "HTML"
     });
 
     await api("sendMessage", {
-      chat_id: targetUserId,
-      text: ticketId
-        ? `✅ <b>Your ticket is now closed</b>\n\nTicket: <code>${ticketId}</code>`
-        : `✅ <b>Your support request is now closed</b>`,
+      chat_id: meta.userId,
+      text: meta.ticketId
+        ? `✅ <b>Your ticket is now closed.</b>\n\nTicket: <code>${meta.ticketId}</code>`
+        : `✅ <b>Your support request is now closed.</b>`,
       parse_mode: "HTML"
     });
     return;
   }
 
   if (text === "/pending") {
-    if (!isAdmin(senderId)) return;
-    if (ticketId) setTicketStatus(ticketId, "PENDING");
+    if (meta.ticketId) setTicketStatus(meta.ticketId, "PENDING");
 
     await api("sendMessage", {
       chat_id: chatId,
-      text: ticketId
-        ? `⏳ Ticket <code>${ticketId}</code> marked pending.`
-        : `⏳ Marked as pending.`,
+      text: meta.ticketId
+        ? `⏳ Ticket <code>${meta.ticketId}</code> marked pending.`
+        : `⏳ Ticket marked pending.`,
       parse_mode: "HTML"
     });
 
     await api("sendMessage", {
-      chat_id: targetUserId,
-      text: ticketId
-        ? `⏳ <b>Your ticket is under review</b>\n\nTicket: <code>${ticketId}</code>`
-        : `⏳ <b>Your support request is under review</b>`,
+      chat_id: meta.userId,
+      text: meta.ticketId
+        ? `⏳ <b>Your ticket is under review.</b>\n\nTicket: <code>${meta.ticketId}</code>`
+        : `⏳ <b>Your request is under review.</b>`,
       parse_mode: "HTML"
     });
     return;
   }
 
   if (text === "/open") {
-    if (!isAdmin(senderId)) return;
-    if (ticketId) setTicketStatus(ticketId, "OPEN");
+    if (meta.ticketId) setTicketStatus(meta.ticketId, "OPEN");
 
     await api("sendMessage", {
       chat_id: chatId,
-      text: ticketId
-        ? `🔓 Ticket <code>${ticketId}</code> reopened.`
-        : `🔓 Marked as open.`,
+      text: meta.ticketId
+        ? `🔓 Ticket <code>${meta.ticketId}</code> reopened.`
+        : `🔓 Ticket reopened.`,
       parse_mode: "HTML"
     });
     return;
   }
 
-  if (blockedUsers.has(targetUserId)) {
+  if (blockedUsers.has(meta.userId)) {
     await api("sendMessage", {
       chat_id: chatId,
-      text: `⚠️ This user is blocked. Unblock first.`,
+      text: `⚠️ This user is blocked. Use /unblock first.`,
       parse_mode: "HTML"
     });
     return;
   }
+
+  if (!meta.userMsgId) return;
 
   const sent = await api("copyMessage", {
-    chat_id: targetUserId,
+    chat_id: meta.userId,
     from_chat_id: chatId,
     message_id: msg.message_id,
-    reply_to_message_id: targetMsgId
+    reply_to_message_id: meta.userMsgId
   });
 
   if (sent && sent.ok) {
@@ -701,9 +721,16 @@ async function handleGroupMessage(msg) {
   }
 }
 
-// =========================
-// MAIN POLL
-// =========================
+// ==========================
+// STARTUP
+// ==========================
+async function startup() {
+  await api("deleteWebhook", { drop_pending_updates: false });
+}
+
+// ==========================
+// POLL
+// ==========================
 async function poll() {
   let offset = (botState.lastUpdateId || 0) + 1;
 
@@ -725,20 +752,16 @@ async function poll() {
         const msg = update.message;
         if (!msg) continue;
         if (msg.from?.is_bot) continue;
-        if (isDuplicateMessage(msg)) continue;
+        if (isDuplicate(msg)) continue;
 
-        const isPrivate = msg.chat.type === "private";
-        const isGroup =
-          msg.chat.type === "group" || msg.chat.type === "supergroup";
-
-        if (isPrivate) {
+        if (msg.chat.type === "private") {
           await handlePrivateMessage(msg);
-        } else if (isGroup) {
+        } else if (msg.chat.type === "group" || msg.chat.type === "supergroup") {
           await handleGroupMessage(msg);
         }
       }
-    } catch (err) {
-      console.error("Poll error:", err.message);
+    } catch (e) {
+      console.error("Poll error:", e.message);
       await sleep(3000);
     }
   }
