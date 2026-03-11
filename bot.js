@@ -1,10 +1,16 @@
-const TOKEN = "8620612566:AAEUrh1-gK4oW1KiH1QHhxRuL_RMGQcmTUY";
+const TOKEN = "8620612566:AAHVuSAMRHfmqin75_MYYalSse7QiJScDZk";
 const API = `https://api.telegram.org/bot${TOKEN}`;
 const MAIN_GROUP_ID = -5184100145;
+
+// Put your Telegram numeric admin IDs here
+const ADMIN_IDS = [123456789];
 
 const http = require("http");
 const fs = require("fs");
 
+// ==============================
+// SERVER
+// ==============================
 const server = http.createServer((req, res) => {
   res.writeHead(200, { "Content-Type": "text/plain; charset=utf-8" });
   res.end("GOWIN Support Bot is running...");
@@ -13,14 +19,17 @@ server.listen(process.env.PORT || 8080);
 
 console.log("🚀 GOWIN Support Bot Started");
 
-// ==========================
+// ==============================
 // FILES
-// ==========================
+// ==============================
 const BLOCK_FILE = "blocked.json";
 const STATE_FILE = "state.json";
 const PROFILE_FILE = "profiles.json";
 const TICKET_FILE = "tickets.json";
 
+// ==============================
+// MEMORY
+// ==============================
 let blockedUsers = new Set();
 let botState = { lastUpdateId: 0 };
 let userProfile = {};
@@ -29,9 +38,9 @@ let albumBucket = {};
 let recentGuard = new Map();
 let blockedNoticeCooldown = new Map();
 
-// ==========================
+// ==============================
 // LOAD / SAVE
-// ==========================
+// ==============================
 function loadJson(file, fallback) {
   try {
     if (!fs.existsSync(file)) return fallback;
@@ -74,9 +83,9 @@ function saveTickets() {
 
 loadData();
 
-// ==========================
-// API / HELPERS
-// ==========================
+// ==============================
+// HELPERS
+// ==============================
 async function api(method, data = {}) {
   try {
     const res = await fetch(`${API}/${method}`, {
@@ -102,7 +111,7 @@ function escapeHtml(text = "") {
     .replace(/'/g, "&#039;");
 }
 
-function shortText(text, max = 120) {
+function shortText(text, max = 300) {
   if (!text) return "Media/File";
   return text.length > max ? text.slice(0, max) + "..." : text;
 }
@@ -123,6 +132,10 @@ function makeMagicId(userId, msgId) {
 
 function makeTicketId() {
   return "GW" + Date.now().toString().slice(-8);
+}
+
+function isAdminId(userId) {
+  return ADMIN_IDS.includes(userId);
 }
 
 function setCategory(userId, category) {
@@ -172,35 +185,50 @@ function getLastTicketInfo(userId) {
   return { ticketId, ...tickets[ticketId] };
 }
 
+function quotedBlock(text) {
+  return `<blockquote>${escapeHtml(shortText(text, 300))}</blockquote>`;
+}
+
+function extractMetaFromMarker(text = "") {
+  const idMatch = text.match(/#ID(\d+)_(\d+)/);
+  const ticketMatch = text.match(/Ticket:<\/b>\s*<code>(GW\d+)<\/code>/);
+
+  return {
+    userId: idMatch ? Number(idMatch[1]) : null,
+    userMsgId: idMatch ? Number(idMatch[2]) : null,
+    ticketId: ticketMatch ? ticketMatch[1] : null
+  };
+}
+
 function messageFingerprint(msg) {
-  const body = msg.text || msg.caption || "";
-  return `${msg.chat.id}:${msg.message_id}:${msg.media_group_id || ""}:${body}`;
+  return `${msg.chat.id}_${msg.message_id}`;
 }
 
 function isDuplicate(msg) {
   const key = messageFingerprint(msg);
   const now = Date.now();
-  const prev = recentGuard.get(key);
 
-  if (prev && now - prev < 15000) return true;
+  if (recentGuard.has(key)) return true;
 
   recentGuard.set(key, now);
 
-  if (recentGuard.size > 500) {
-    const cutoff = now - 30000;
-    for (const [k, v] of recentGuard.entries()) {
-      if (v < cutoff) recentGuard.delete(k);
-    }
-  }
+  setTimeout(() => {
+    recentGuard.delete(key);
+  }, 30000);
 
   return false;
 }
 
 async function sendTyping(chatId) {
-  await api("sendChatAction", { chat_id: chatId, action: "typing" });
+  await api("sendChatAction", {
+    chat_id: chatId,
+    action: "typing"
+  });
 }
 
 async function isGroupAdmin(chatId, userId) {
+  if (isAdminId(userId)) return true;
+
   const res = await api("getChatMember", {
     chat_id: chatId,
     user_id: userId
@@ -212,13 +240,9 @@ async function isGroupAdmin(chatId, userId) {
   return status === "creator" || status === "administrator";
 }
 
-function quotedBlock(text) {
-  return `<blockquote>${escapeHtml(shortText(text, 300))}</blockquote>`;
-}
-
-// ==========================
+// ==============================
 // MENU
-// ==========================
+// ==============================
 const BTN_DEPOSIT = "Deposit Issue";
 const BTN_WITHDRAW = "Withdraw Issue";
 const BTN_LOGIN = "Login / Game ID Issue";
@@ -292,9 +316,9 @@ function categoryPrompt(category) {
   return map[category] || helpText();
 }
 
-// ==========================
-// MESSAGE FORMATTERS
-// ==========================
+// ==============================
+// FORMATTERS
+// ==============================
 function buildMarkerMessage({ msg, ticketId, category, contentType = "Text", preview = "" }) {
   const userId = msg.chat.id;
   const magicId = makeMagicId(userId, msg.message_id);
@@ -311,20 +335,9 @@ function buildMarkerMessage({ msg, ticketId, category, contentType = "Text", pre
   );
 }
 
-function extractMetaFromMarker(text = "") {
-  const idMatch = text.match(/#ID(\d+)_(\d+)/);
-  const ticketMatch = text.match(/Ticket:<\/b>\s*<code>(GW\d+)<\/code>/);
-
-  return {
-    userId: idMatch ? Number(idMatch[1]) : null,
-    userMsgId: idMatch ? Number(idMatch[2]) : null,
-    ticketId: ticketMatch ? ticketMatch[1] : null
-  };
-}
-
-// ==========================
-// ALBUM
-// ==========================
+// ==============================
+// ALBUM HANDLER
+// ==============================
 async function sendAlbumGroup(groupId) {
   const bucket = albumBucket[groupId];
   if (!bucket || !bucket.messages?.length) return;
@@ -366,7 +379,9 @@ async function sendAlbumGroup(groupId) {
     media
   });
 
-  const preview = originalCaption ? quotedBlock(originalCaption) : quotedBlock("Album / Multiple Media");
+  const preview = originalCaption
+    ? quotedBlock(originalCaption)
+    : quotedBlock("Album / Multiple Media");
 
   await api("sendMessage", {
     chat_id: MAIN_GROUP_ID,
@@ -391,9 +406,9 @@ async function sendAlbumGroup(groupId) {
   });
 }
 
-// ==========================
+// ==============================
 // PRIVATE SIDE
-// ==========================
+// ==============================
 async function handlePrivateMessage(msg) {
   const userId = msg.chat.id;
   const text = msg.text || msg.caption || "";
@@ -517,7 +532,7 @@ async function handlePrivateMessage(msg) {
   const category = getCategory(userId);
   const ticketId = createTicket(userId, category, msg.message_id);
 
-  if (text && !msg.photo && !msg.video && !msg.voice && !msg.document) {
+  if (text && !msg.photo && !msg.video && !msg.voice && !msg.document && !msg.sticker) {
     const preview = quotedBlock(text);
 
     await api("sendMessage", {
@@ -532,28 +547,39 @@ async function handlePrivateMessage(msg) {
       parse_mode: "HTML",
       disable_web_page_preview: true
     });
-  } else {
-    await api("copyMessage", {
-      chat_id: MAIN_GROUP_ID,
-      from_chat_id: userId,
-      message_id: msg.message_id
-    });
-
-    const mediaText = msg.caption || "Media / File";
-    const preview = quotedBlock(mediaText);
 
     await api("sendMessage", {
-      chat_id: MAIN_GROUP_ID,
-      text: buildMarkerMessage({
-        msg,
-        ticketId,
-        category,
-        contentType: "Media / File",
-        preview
-      }),
+      chat_id: userId,
+      text:
+        `✅ <b>Support request received</b>\n\n` +
+        `Ticket: <code>${ticketId}</code>\n` +
+        `Category: <b>${escapeHtml(category)}</b>\n` +
+        `Status: <b>OPEN</b>`,
       parse_mode: "HTML"
     });
+    return;
   }
+
+  await api("copyMessage", {
+    chat_id: MAIN_GROUP_ID,
+    from_chat_id: userId,
+    message_id: msg.message_id
+  });
+
+  const mediaText = msg.caption || "Media / File";
+  const preview = quotedBlock(mediaText);
+
+  await api("sendMessage", {
+    chat_id: MAIN_GROUP_ID,
+    text: buildMarkerMessage({
+      msg,
+      ticketId,
+      category,
+      contentType: "Media / File",
+      preview
+    }),
+    parse_mode: "HTML"
+  });
 
   await api("sendMessage", {
     chat_id: userId,
@@ -566,9 +592,9 @@ async function handlePrivateMessage(msg) {
   });
 }
 
-// ==========================
+// ==============================
 // GROUP SIDE
-// ==========================
+// ==============================
 async function handleGroupMessage(msg) {
   const chatId = msg.chat.id;
   const text = msg.text || "";
@@ -721,18 +747,18 @@ async function handleGroupMessage(msg) {
   }
 }
 
-// ==========================
+// ==============================
 // STARTUP
-// ==========================
+// ==============================
 async function startup() {
-  await api("deleteWebhook", { drop_pending_updates: false });
+  await api("deleteWebhook", { drop_pending_updates: true });
 }
 
-// ==========================
+// ==============================
 // POLL
-// ==========================
+// ==============================
 async function poll() {
-  let offset = (botState.lastUpdateId || 0) + 1;
+  let offset = botState.lastUpdateId ? botState.lastUpdateId + 1 : 0;
 
   while (true) {
     try {
@@ -747,6 +773,7 @@ async function poll() {
       for (const update of data.result) {
         botState.lastUpdateId = update.update_id;
         saveState();
+
         offset = update.update_id + 1;
 
         const msg = update.message;
@@ -756,7 +783,9 @@ async function poll() {
 
         if (msg.chat.type === "private") {
           await handlePrivateMessage(msg);
-        } else if (msg.chat.type === "group" || msg.chat.type === "supergroup") {
+        }
+
+        if (msg.chat.type === "group" || msg.chat.type === "supergroup") {
           await handleGroupMessage(msg);
         }
       }
