@@ -36,7 +36,6 @@ let userProfile = {};
 let processedMessages = {};
 
 const albumBucket = {};
-const blockedNoticeCooldown = new Map();
 const runtimeProcessedUpdates = new Set();
 const runtimeProcessedMessages = new Set();
 
@@ -60,15 +59,31 @@ function saveJson(file, data) {
   }
 }
 
+function loadBlockedUsers() {
+  try {
+    if (!fs.existsSync(BLOCK_FILE)) return new Set();
+    const data = JSON.parse(fs.readFileSync(BLOCK_FILE, "utf8"));
+    return new Set(Array.isArray(data) ? data.map(Number) : []);
+  } catch {
+    return new Set();
+  }
+}
+
+function persistBlockedUsers() {
+  try {
+    fs.writeFileSync(BLOCK_FILE, JSON.stringify([...blockedUsers], null, 2));
+    return true;
+  } catch (e) {
+    console.error("Failed to save blocked users:", e.message);
+    return false;
+  }
+}
+
 function loadData() {
-  blockedUsers = new Set(loadJson(BLOCK_FILE, []));
+  blockedUsers = loadBlockedUsers();
   botState = loadJson(STATE_FILE, { lastUpdateId: 0 });
   userProfile = loadJson(PROFILE_FILE, {});
   processedMessages = loadJson(MSG_CACHE_FILE, {});
-}
-
-function saveBlocked() {
-  saveJson(BLOCK_FILE, [...blockedUsers]);
 }
 
 function saveState() {
@@ -84,6 +99,25 @@ function saveProcessedMessages() {
 }
 
 loadData();
+
+// ==============================
+// BLOCK HELPERS
+// ==============================
+function blockUser(userId) {
+  const id = Number(userId);
+  blockedUsers.add(id);
+  return persistBlockedUsers();
+}
+
+function unblockUser(userId) {
+  const id = Number(userId);
+  blockedUsers.delete(id);
+  return persistBlockedUsers();
+}
+
+function isBlocked(userId) {
+  return blockedUsers.has(Number(userId));
+}
 
 // ==============================
 // HELPERS
@@ -396,18 +430,7 @@ async function handlePrivateMessage(msg) {
   const userId = msg.chat.id;
   const text = msg.text || msg.caption || "";
 
-  if (blockedUsers.has(userId)) {
-    const last = blockedNoticeCooldown.get(userId) || 0;
-    const now = Date.now();
-
-    if (now - last > 300000) {
-      blockedNoticeCooldown.set(userId, now);
-      await api("sendMessage", {
-        chat_id: userId,
-        text: `🚫 <b>Your access to GOWIN Support is restricted.</b>`,
-        parse_mode: "HTML"
-      });
-    }
+  if (isBlocked(userId)) {
     return;
   }
 
@@ -518,7 +541,6 @@ async function handlePrivateMessage(msg) {
   setLastTicket(userId, ticketId);
   setLastTicketStatus(userId, "OPEN");
 
-  // TEXT ONLY
   if (text && !msg.photo && !msg.video && !msg.voice && !msg.document && !msg.sticker) {
     await api("sendMessage", {
       chat_id: MAIN_GROUP_ID,
@@ -539,7 +561,6 @@ async function handlePrivateMessage(msg) {
     return;
   }
 
-  // SINGLE MEDIA/FILE
   await api("copyMessage", {
     chat_id: MAIN_GROUP_ID,
     from_chat_id: userId,
@@ -597,38 +618,44 @@ async function handleGroupMessage(msg) {
   if (!meta.userId) return;
 
   if (text === "/block") {
-    blockedUsers.add(meta.userId);
-    saveBlocked();
+    const ok = blockUser(meta.userId);
 
     await api("sendMessage", {
       chat_id: chatId,
-      text: `🚫 <b>User blocked successfully</b>\nUser ID: <code>${meta.userId}</code>`,
+      text: ok
+        ? `🚫 <b>User blocked successfully</b>\nUser ID: <code>${meta.userId}</code>`
+        : `❌ <b>Block failed</b>\nCould not save block data.`,
       parse_mode: "HTML"
     });
 
-    await api("sendMessage", {
-      chat_id: meta.userId,
-      text: `🚫 <b>You have been blocked by GOWIN Support.</b>`,
-      parse_mode: "HTML"
-    });
+    if (ok) {
+      await api("sendMessage", {
+        chat_id: meta.userId,
+        text: `🚫 <b>You have been blocked by GOWIN Support.</b>`,
+        parse_mode: "HTML"
+      });
+    }
     return;
   }
 
   if (text === "/unblock") {
-    blockedUsers.delete(meta.userId);
-    saveBlocked();
+    const ok = unblockUser(meta.userId);
 
     await api("sendMessage", {
       chat_id: chatId,
-      text: `✅ <b>User unblocked successfully</b>\nUser ID: <code>${meta.userId}</code>`,
+      text: ok
+        ? `✅ <b>User unblocked successfully</b>\nUser ID: <code>${meta.userId}</code>`
+        : `❌ <b>Unblock failed</b>\nCould not save unblock data.`,
       parse_mode: "HTML"
     });
 
-    await api("sendMessage", {
-      chat_id: meta.userId,
-      text: `✅ <b>You have been unblocked by GOWIN Support.</b>`,
-      parse_mode: "HTML"
-    });
+    if (ok) {
+      await api("sendMessage", {
+        chat_id: meta.userId,
+        text: `✅ <b>You have been unblocked by GOWIN Support.</b>`,
+        parse_mode: "HTML"
+      });
+    }
     return;
   }
 
@@ -677,7 +704,7 @@ async function handleGroupMessage(msg) {
     return;
   }
 
-  if (blockedUsers.has(meta.userId)) {
+  if (isBlocked(meta.userId)) {
     await api("sendMessage", {
       chat_id: chatId,
       text: `⚠️ This user is blocked. Use /unblock first.`,
@@ -688,7 +715,10 @@ async function handleGroupMessage(msg) {
 
   if (!meta.userMsgId) return;
 
-  // ADMIN REPLY -> USER ONLY ONCE
+  const replyKey = `reply_${chatId}_${msg.message_id}`;
+  if (runtimeProcessedMessages.has(replyKey)) return;
+  runtimeProcessedMessages.add(replyKey);
+
   await api("copyMessage", {
     chat_id: meta.userId,
     from_chat_id: chatId,
@@ -708,6 +738,7 @@ async function handleGroupMessage(msg) {
 // ==============================
 async function startup() {
   await api("deleteWebhook", { drop_pending_updates: true });
+  blockedUsers = loadBlockedUsers();
 }
 
 // ==============================
