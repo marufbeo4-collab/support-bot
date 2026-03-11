@@ -1,4 +1,4 @@
-const TOKEN = "8620612566:AAHVuSAMRHfmqin75_MYYalSse7QiJScDZk";
+const TOKEN = "8620612566:AAGa7h3L0PXdR9tugQOproiWIZPY6KVymzg";
 const API = `https://api.telegram.org/bot${TOKEN}`;
 const MAIN_GROUP_ID = -5184100145;
 
@@ -831,3 +831,4 @@ async function poll() {
   await startup();
   await poll();
 })();
+
