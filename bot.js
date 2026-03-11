@@ -17,7 +17,7 @@ const server = http.createServer((req, res) => {
 });
 server.listen(process.env.PORT || 8080);
 
-console.log("🚀 GOWIN Support Bot Started with Advanced Tech!");
+console.log("🚀 GOWIN Support Bot Started with Ghost-Proof Block System!");
 
 // ==============================
 // FILES
@@ -93,7 +93,7 @@ function saveProcessedMessages() { saveJson(MSG_CACHE_FILE, processedMessages); 
 loadData();
 
 // ==============================
-// BLOCK HELPERS
+// 🛡️ GHOST-PROOF BLOCK HELPERS
 // ==============================
 function clearUserMessageCache(userId) {
   const uid = String(userId);
@@ -110,6 +110,7 @@ function clearUserMessageCache(userId) {
 
 function blockUser(userId) {
   const id = Number(userId);
+  blockedUsers = loadBlockedUsers(); // 🔄 Sync file first to beat ghost processes
   blockedUsers.add(id);
   clearUserMessageCache(id);
   return persistBlockedUsers();
@@ -117,12 +118,15 @@ function blockUser(userId) {
 
 function unblockUser(userId) {
   const id = Number(userId);
+  blockedUsers = loadBlockedUsers(); // 🔄 Sync file first to beat ghost processes
   blockedUsers.delete(id);
   clearUserMessageCache(id);
   return persistBlockedUsers();
 }
 
 function isBlocked(userId) {
+  // 🔄 Force load from file EVERY TIME to make sure all ghost processes know about the block!
+  blockedUsers = loadBlockedUsers(); 
   return blockedUsers.has(Number(userId));
 }
 
@@ -145,12 +149,7 @@ async function api(method, data = {}) {
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 function escapeHtml(text = "") {
-  return String(text)
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#039;");
+  return String(text).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;");
 }
 
 function getUserName(msg) {
@@ -179,8 +178,7 @@ async function isGroupAdmin(chatId, userId) {
   if (isAdminId(userId)) return true;
   const res = await api("getChatMember", { chat_id: chatId, user_id: userId });
   if (!res || !res.ok) return false;
-  const status = res.result?.status;
-  return status === "creator" || status === "administrator";
+  return res.result?.status === "creator" || res.result?.status === "administrator";
 }
 
 function setCategory(userId, category) {
@@ -295,6 +293,9 @@ async function sendAlbumGroup(groupId) {
 
   const firstMsg = bucket.firstMsg;
   const userId = firstMsg.chat.id;
+  
+  if (isBlocked(userId)) return; // 🛡️ Strict shield for albums
+
   const category = getCategory(userId);
   const ticketId = makeTicketId();
 
@@ -317,7 +318,7 @@ async function sendAlbumGroup(groupId) {
     chat_id: MAIN_GROUP_ID,
     text: buildCompactTicketMessage(firstMsg, category, ticketId, originalCaption),
     parse_mode: "HTML",
-    reply_markup: getAdminInlineKeyboard(userId) // 🔥 Advanced Tech
+    reply_markup: getAdminInlineKeyboard(userId)
   });
 
   await api("sendMessage", {
@@ -351,7 +352,7 @@ async function handlePrivateMessage(msg) {
       processedMessages[`warn_${userId}`] = now;
       saveProcessedMessages();
     }
-    return; // Strictly stop here
+    return; // ⛔ STRICTLY STOP HERE! NO TICKET FOR YOU!
   }
 
   if (text === "/start") {
@@ -424,7 +425,7 @@ async function handlePrivateMessage(msg) {
       text: buildCompactTicketMessage(msg, category, ticketId, text),
       parse_mode: "HTML",
       disable_web_page_preview: true,
-      reply_markup: getAdminInlineKeyboard(userId) // 🔥 Advanced Tech
+      reply_markup: getAdminInlineKeyboard(userId)
     });
 
     if (!isSpam) {
@@ -439,7 +440,7 @@ async function handlePrivateMessage(msg) {
     chat_id: MAIN_GROUP_ID,
     text: buildCompactTicketMessage(msg, category, ticketId, msg.caption || "Media / File"),
     parse_mode: "HTML",
-    reply_markup: getAdminInlineKeyboard(userId) // 🔥 Advanced Tech
+    reply_markup: getAdminInlineKeyboard(userId)
   });
 
   if (!isSpam) {
@@ -448,7 +449,7 @@ async function handlePrivateMessage(msg) {
 }
 
 // ==============================
-// CALLBACK QUERY HANDLER (NEW ADVANCE TECH)
+// CALLBACK QUERY HANDLER 
 // ==============================
 async function handleCallbackQuery(cb) {
   const data = cb.data;
@@ -477,7 +478,6 @@ async function handleCallbackQuery(cb) {
     await api("sendMessage", { chat_id: targetUserId, text: `✅ <b>Your support request is now closed.</b>`, parse_mode: "HTML" });
     await api("answerCallbackQuery", { callback_query_id: cb.id, text: "Ticket Closed!" });
     
-    // Update button layout dynamically
     await api("editMessageReplyMarkup", {
       chat_id: adminGroupId,
       message_id: messageId,
@@ -492,7 +492,7 @@ async function handleCallbackQuery(cb) {
         chat_id: targetUserId, 
         text: `🚫 <b>ACCOUNT SUSPENDED</b>\n\nYou have been blocked by the admin.`, 
         parse_mode: "HTML", 
-        reply_markup: { remove_keyboard: true } // 🔥 Force remove keyboard on block
+        reply_markup: { remove_keyboard: true } 
       });
       await api("answerCallbackQuery", { callback_query_id: cb.id, text: "User Blocked successfully!", show_alert: true });
     }
@@ -503,7 +503,7 @@ async function handleCallbackQuery(cb) {
         chat_id: targetUserId, 
         text: `✅ <b>ACCOUNT RESTORED</b>\n\nYou have been unblocked by the admin. You can send messages now.`, 
         parse_mode: "HTML",
-        reply_markup: mainKeyboard // 🔥 Restore keyboard on unblock
+        reply_markup: mainKeyboard 
       });
       await api("answerCallbackQuery", { callback_query_id: cb.id, text: "User Unblocked successfully!", show_alert: true });
     }
@@ -530,11 +530,6 @@ async function handleGroupMessage(msg) {
 
   const meta = extractMetaFromText(msg.reply_to_message.text || msg.reply_to_message.caption || "");
   if (!meta.userId) return;
-
-  // Manual commands kept for backup, but buttons will be primarily used now
-  if (text === "/block" || text === "/unblock" || text === "/close") {
-    await api("sendMessage", { chat_id: chatId, text: `💡 <b>Pro Tip:</b> Please use the Inline Buttons under the ticket message instead of typing commands!`, parse_mode: "HTML" });
-  }
 
   if (isBlocked(meta.userId)) {
     await api("sendMessage", { chat_id: chatId, text: `⚠️ <b>Action Failed:</b> This user is currently blocked. Click 'Unblock' on their ticket first to reply.`, parse_mode: "HTML" });
@@ -594,7 +589,6 @@ async function poll() {
         saveState();
         offset = update.update_id + 1;
 
-        // 🔥 Handle Button Clicks (Callback Queries)
         if (update.callback_query) {
           await handleCallbackQuery(update.callback_query);
           continue;
