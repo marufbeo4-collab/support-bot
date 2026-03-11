@@ -1,4 +1,4 @@
-const TOKEN = "8620612566:AAGa7h3L0PXdR9tugQOproiWIZPY6KVymzg";
+const TOKEN = "8620612566:AAG1DqsHR8du4QZUDaP489yszhMczweF5o4"; // Apnar notun token ekhane diben
 const API = `https://api.telegram.org/bot${TOKEN}`;
 const MAIN_GROUP_ID = -5184100145;
 
@@ -17,7 +17,7 @@ const server = http.createServer((req, res) => {
 });
 server.listen(process.env.PORT || 8080);
 
-console.log("🚀 GOWIN Support Bot Started with Ghost-Proof Block System!");
+console.log("🚀 GOWIN Support Bot Started with STRICT ANTI-DUPLICATE LOCK!");
 
 // ==============================
 // FILES
@@ -33,12 +33,10 @@ const MSG_CACHE_FILE = "processed_messages.json";
 let blockedUsers = new Set();
 let botState = { lastUpdateId: 0 };
 let userProfile = {};
-let processedMessages = {};
+let isPolling = false;
 
 const albumBucket = {};
-const runtimeProcessedUpdates = new Set();
 const runtimeProcessedMessages = new Set();
-let isPolling = false;
 
 // ==============================
 // LOAD / SAVE
@@ -56,7 +54,7 @@ function saveJson(file, data) {
   try {
     fs.writeFileSync(file, JSON.stringify(data, null, 2));
   } catch (e) {
-    console.error(`Save error (${file}):`, e.message);
+    // Ignore save errors silently
   }
 }
 
@@ -83,55 +81,86 @@ function loadData() {
   blockedUsers = loadBlockedUsers();
   botState = loadJson(STATE_FILE, { lastUpdateId: 0 });
   userProfile = loadJson(PROFILE_FILE, {});
-  processedMessages = loadJson(MSG_CACHE_FILE, {});
 }
 
 function saveState() { saveJson(STATE_FILE, botState); }
 function saveProfiles() { saveJson(PROFILE_FILE, userProfile); }
-function saveProcessedMessages() { saveJson(MSG_CACHE_FILE, processedMessages); }
 
 loadData();
 
 // ==============================
-// 🛡️ GHOST-PROOF BLOCK HELPERS
+// 🔥 ULTRA-STRICT MESSAGE CACHE (FILE LEVEL LOCK)
 // ==============================
 function clearUserMessageCache(userId) {
   const uid = String(userId);
-  for (const key of Object.keys(processedMessages)) {
-    if (key.startsWith(`${uid}_`)) delete processedMessages[key];
+  let diskCache = loadJson(MSG_CACHE_FILE, {});
+  
+  for (const key of Object.keys(diskCache)) {
+    if (key.startsWith(`${uid}_`)) delete diskCache[key];
   }
   for (const key of [...runtimeProcessedMessages]) {
     if (key.startsWith(`${uid}_`) || key.includes(`_${uid}_`)) {
       runtimeProcessedMessages.delete(key);
     }
   }
-  saveProcessedMessages();
+  saveJson(MSG_CACHE_FILE, diskCache);
 }
 
+function alreadyProcessedMessage(msg) {
+  const key = `${msg.chat.id}_${msg.message_id}`;
+  
+  // 1. First check instant RAM cache
+  if (runtimeProcessedMessages.has(key)) return true;
+  
+  // 2. Then check Hard Disk cache (Solves Ghost Processes & Loop Bugs)
+  let diskCache = loadJson(MSG_CACHE_FILE, {});
+  const now = Date.now();
+  
+  if (diskCache[key] && (now - diskCache[key] < 86400000)) {
+    return true; // Already processed by another process or loop!
+  }
+  
+  // Lock it immediately in RAM and Disk
+  runtimeProcessedMessages.add(key);
+  diskCache[key] = now;
+  
+  // Clean old cache to prevent file getting too large
+  const keys = Object.keys(diskCache);
+  if (keys.length > 3000) {
+    const cutoff = now - 86400000;
+    for (const k of keys) {
+      if (diskCache[k] < cutoff) delete diskCache[k];
+    }
+  }
+  
+  saveJson(MSG_CACHE_FILE, diskCache);
+  return false;
+}
+
+// ==============================
+// BLOCK HELPERS
+// ==============================
 function blockUser(userId) {
-  const id = Number(userId);
-  blockedUsers = loadBlockedUsers(); // 🔄 Sync file first to beat ghost processes
-  blockedUsers.add(id);
-  clearUserMessageCache(id);
+  blockedUsers = loadBlockedUsers();
+  blockedUsers.add(Number(userId));
+  clearUserMessageCache(userId);
   return persistBlockedUsers();
 }
 
 function unblockUser(userId) {
-  const id = Number(userId);
-  blockedUsers = loadBlockedUsers(); // 🔄 Sync file first to beat ghost processes
-  blockedUsers.delete(id);
-  clearUserMessageCache(id);
+  blockedUsers = loadBlockedUsers();
+  blockedUsers.delete(Number(userId));
+  clearUserMessageCache(userId);
   return persistBlockedUsers();
 }
 
 function isBlocked(userId) {
-  // 🔄 Force load from file EVERY TIME to make sure all ghost processes know about the block!
   blockedUsers = loadBlockedUsers(); 
   return blockedUsers.has(Number(userId));
 }
 
 // ==============================
-// HELPERS
+// API HELPERS
 // ==============================
 async function api(method, data = {}) {
   try {
@@ -162,17 +191,9 @@ function getUserLink(msg) {
   return `<a href="tg://user?id=${msg.chat.id}">${escapeHtml(getUserName(msg))}</a>`;
 }
 
-function makeMagicId(userId, msgId) {
-  return `#ID${userId}_${msgId}`;
-}
-
-function makeTicketId() {
-  return "GW" + Date.now().toString().slice(-8);
-}
-
-function isAdminId(userId) {
-  return ADMIN_IDS.includes(userId);
-}
+function makeMagicId(userId, msgId) { return `#ID${userId}_${msgId}`; }
+function makeTicketId() { return "GW" + Date.now().toString().slice(-8); }
+function isAdminId(userId) { return ADMIN_IDS.includes(userId); }
 
 async function isGroupAdmin(chatId, userId) {
   if (isAdminId(userId)) return true;
@@ -204,21 +225,6 @@ function setLastTicketStatus(userId, status) {
 }
 
 function getLastTicketStatus(userId) { return userProfile[userId]?.lastTicketStatus || "OPEN"; }
-
-function messageKey(msg) { return `${msg.chat.id}_${msg.message_id}`; }
-function updateKey(update) { return String(update.update_id); }
-
-function alreadyProcessedMessage(msg) {
-  const key = messageKey(msg);
-  const now = Date.now();
-  if (runtimeProcessedMessages.has(key)) return true;
-  runtimeProcessedMessages.add(key);
-  if (processedMessages[key] && now - processedMessages[key] < 86400000) return true;
-  processedMessages[key] = now;
-  saveProcessedMessages();
-  return false;
-}
-
 function extractMetaFromText(text = "") {
   const idMatch = text.match(/#ID(\d+)_(\d+)/);
   return { userId: idMatch ? Number(idMatch[1]) : null, userMsgId: idMatch ? Number(idMatch[2]) : null };
@@ -265,9 +271,6 @@ function categoryPrompt(category) {
   return map[category] || helpText();
 }
 
-// ==============================
-// ADVANCED ADMIN KEYBOARD
-// ==============================
 function getAdminInlineKeyboard(userId) {
   return {
     inline_keyboard: [
@@ -294,7 +297,7 @@ async function sendAlbumGroup(groupId) {
   const firstMsg = bucket.firstMsg;
   const userId = firstMsg.chat.id;
   
-  if (isBlocked(userId)) return; // 🛡️ Strict shield for albums
+  if (isBlocked(userId)) return;
 
   const category = getCategory(userId);
   const ticketId = makeTicketId();
@@ -336,23 +339,22 @@ async function handlePrivateMessage(msg) {
   const text = msg.text || msg.caption || "";
   const tCheck = normalizeText(text);
 
-  // 🔥 STRICT FIREWALL FOR BLOCKED USERS
   if (isBlocked(userId)) {
+    const diskCache = loadJson(MSG_CACHE_FILE, {});
     const now = Date.now();
-    const lastWarn = processedMessages[`warn_${userId}`] || 0;
+    const lastWarn = diskCache[`warn_${userId}`] || 0;
     
-    // Only warn them once every 5 minutes to prevent bot lag
-    if (now - lastWarn > 300000) {
+    if (now - lastWarn > 300000) { // Warn once every 5 mins
       await api("sendMessage", {
         chat_id: userId,
-        text: `🚫 <b>ACCOUNT SUSPENDED</b>\n\nYou have been blocked by the admin for violating rules or spamming. You can no longer send messages to support.`,
+        text: `🚫 <b>ACCOUNT SUSPENDED</b>\n\nYou have been blocked by the admin. You can no longer send messages.`,
         parse_mode: "HTML",
-        reply_markup: { remove_keyboard: true } // 🔥 Kills their menu completely
+        reply_markup: { remove_keyboard: true }
       });
-      processedMessages[`warn_${userId}`] = now;
-      saveProcessedMessages();
+      diskCache[`warn_${userId}`] = now;
+      saveJson(MSG_CACHE_FILE, diskCache);
     }
-    return; // ⛔ STRICTLY STOP HERE! NO TICKET FOR YOU!
+    return;
   }
 
   if (text === "/start") {
@@ -411,11 +413,15 @@ async function handlePrivateMessage(msg) {
 
   const category = getCategory(userId);
   const ticketId = makeTicketId();
+  
+  const diskCache = loadJson(MSG_CACHE_FILE, {});
   const now = Date.now();
-  const lastMsgTime = processedMessages[`spam_${userId}`] || 0;
+  const lastMsgTime = diskCache[`spam_${userId}`] || 0;
   const isSpam = (now - lastMsgTime) < 4000;
   
-  processedMessages[`spam_${userId}`] = now;
+  diskCache[`spam_${userId}`] = now;
+  saveJson(MSG_CACHE_FILE, diskCache);
+  
   setLastTicket(userId, ticketId);
   setLastTicketStatus(userId, "OPEN");
 
@@ -449,7 +455,7 @@ async function handlePrivateMessage(msg) {
 }
 
 // ==============================
-// CALLBACK QUERY HANDLER 
+// CALLBACK & GROUP HANDLERS 
 // ==============================
 async function handleCallbackQuery(cb) {
   const data = cb.data;
@@ -481,38 +487,22 @@ async function handleCallbackQuery(cb) {
     await api("editMessageReplyMarkup", {
       chat_id: adminGroupId,
       message_id: messageId,
-      reply_markup: {
-        inline_keyboard: [[{ text: "🚫 Block User", callback_data: `block_${targetUserId}` }, { text: "✅ Unblock", callback_data: `unblock_${targetUserId}` }]]
-      }
+      reply_markup: { inline_keyboard: [[{ text: "🚫 Block User", callback_data: `block_${targetUserId}` }, { text: "✅ Unblock", callback_data: `unblock_${targetUserId}` }]] }
     });
-
   } else if (action === "block") {
     if (blockUser(targetUserId)) {
-      await api("sendMessage", { 
-        chat_id: targetUserId, 
-        text: `🚫 <b>ACCOUNT SUSPENDED</b>\n\nYou have been blocked by the admin.`, 
-        parse_mode: "HTML", 
-        reply_markup: { remove_keyboard: true } 
-      });
+      await api("sendMessage", { chat_id: targetUserId, text: `🚫 <b>ACCOUNT SUSPENDED</b>\n\nYou have been blocked by the admin.`, parse_mode: "HTML", reply_markup: { remove_keyboard: true } });
       await api("answerCallbackQuery", { callback_query_id: cb.id, text: "User Blocked successfully!", show_alert: true });
     }
   } else if (action === "unblock") {
     if (unblockUser(targetUserId)) {
       setLastTicketStatus(targetUserId, "OPEN");
-      await api("sendMessage", { 
-        chat_id: targetUserId, 
-        text: `✅ <b>ACCOUNT RESTORED</b>\n\nYou have been unblocked by the admin. You can send messages now.`, 
-        parse_mode: "HTML",
-        reply_markup: mainKeyboard 
-      });
+      await api("sendMessage", { chat_id: targetUserId, text: `✅ <b>ACCOUNT RESTORED</b>\n\nYou have been unblocked by the admin. You can send messages now.`, parse_mode: "HTML", reply_markup: mainKeyboard });
       await api("answerCallbackQuery", { callback_query_id: cb.id, text: "User Unblocked successfully!", show_alert: true });
     }
   }
 }
 
-// ==============================
-// GROUP HANDLER (FOR REPLIES)
-// ==============================
 async function handleGroupMessage(msg) {
   const chatId = msg.chat.id;
   const text = msg.text || "";
@@ -542,22 +532,12 @@ async function handleGroupMessage(msg) {
   if (runtimeProcessedMessages.has(replyKey)) return;
   runtimeProcessedMessages.add(replyKey);
 
-  await api("copyMessage", {
-    chat_id: meta.userId,
-    from_chat_id: chatId,
-    message_id: msg.message_id,
-    reply_to_message_id: meta.userMsgId
-  });
-
-  await api("setMessageReaction", {
-    chat_id: chatId,
-    message_id: msg.message_id,
-    reaction: [{ type: "emoji", emoji: "⚡" }]
-  });
+  await api("copyMessage", { chat_id: meta.userId, from_chat_id: chatId, message_id: msg.message_id, reply_to_message_id: meta.userMsgId });
+  await api("setMessageReaction", { chat_id: chatId, message_id: msg.message_id, reaction: [{ type: "emoji", emoji: "⚡" }] });
 }
 
 // ==============================
-// STARTUP & POLL
+// 🔥 ULTRA-STRICT POLLING SYSTEM
 // ==============================
 async function startup() {
   await api("deleteWebhook", { drop_pending_updates: true });
@@ -575,27 +555,30 @@ async function poll() {
       const res = await fetch(`${API}/getUpdates?timeout=30&offset=${offset}`);
       const data = await res.json();
 
-      if (!data.ok) {
-        await sleep(3000);
+      if (!data.ok || !data.result || data.result.length === 0) {
+        await sleep(2000);
         continue;
       }
 
+      // 🔥 FIX: Instantly tell Telegram we received the batch BEFORE processing messages.
+      // This guarantees Telegram won't send the same message 3 times!
+      const highestUpdateId = data.result[data.result.length - 1].update_id;
+      offset = highestUpdateId + 1;
+      
+      botState.lastUpdateId = highestUpdateId;
+      saveState();
+
       for (const update of data.result) {
-        const uKey = updateKey(update);
-        if (runtimeProcessedUpdates.has(uKey)) continue;
-        runtimeProcessedUpdates.add(uKey);
-
-        botState.lastUpdateId = update.update_id;
-        saveState();
-        offset = update.update_id + 1;
-
         if (update.callback_query) {
           await handleCallbackQuery(update.callback_query);
           continue;
         }
 
         const msg = update.message;
-        if (!msg || msg.from?.is_bot || alreadyProcessedMessage(msg)) continue;
+        if (!msg || msg.from?.is_bot) continue;
+        
+        // 🔥 File Level Strict Lock
+        if (alreadyProcessedMessage(msg)) continue; 
 
         if (msg.chat.type === "private") {
           await handlePrivateMessage(msg);
@@ -604,6 +587,7 @@ async function poll() {
         }
       }
     } catch (e) {
+      console.error("Poll Error:", e.message);
       await sleep(3000);
     }
   }
