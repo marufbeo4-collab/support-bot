@@ -1,6 +1,8 @@
-const TOKEN = "8620612566:AAG1DqsHR8du4QZUDaP489yszhMczweF5o4";
+const TOKEN = "YOUR_NEW_BOT_TOKEN_HERE";
 const API = `https://api.telegram.org/bot${TOKEN}`;
+
 const MAIN_GROUP_ID = -1003888768369;
+const WITHDRAW_GROUP_ID = -1003813028897;
 
 const http = require("http");
 const fs = require("fs");
@@ -14,7 +16,7 @@ const PORT = process.env.PORT || 10000;
 const server = http.createServer((req, res) => {
   if (req.url === "/health") {
     res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
-    res.end(
+    return res.end(
       JSON.stringify({
         status: "ok",
         service: "MARUF BOSS SUPPORT BOT",
@@ -22,7 +24,6 @@ const server = http.createServer((req, res) => {
         time: new Date().toISOString(),
       })
     );
-    return;
   }
 
   res.writeHead(200, { "Content-Type": "text/plain; charset=utf-8" });
@@ -38,8 +39,19 @@ server.listen(PORT, "0.0.0.0", () => {
 // FILES / MEMORY
 // ==============================
 const BLOCK_FILE = path.join(__dirname, "blocked.json");
+
 let blockedUsers = new Set();
 const albumBucket = Object.create(null);
+
+// user current selected category
+const userCategory = new Map(); // chatId => "deposit" | "withdraw" | "gameid" | "others"
+
+// batching system
+const userBatch = new Map(); // chatId => { items: [], timer, targetGroupId, firstMsgId, firstAt, userLink }
+
+// anti spam
+const duplicateTracker = new Map(); // chatId => { text, count, time }
+const lastUserReplyNotice = new Map(); // chatId => timestamp
 
 // ==============================
 // LOAD BLOCK LIST
@@ -48,9 +60,7 @@ try {
   if (fs.existsSync(BLOCK_FILE)) {
     const data = fs.readFileSync(BLOCK_FILE, "utf8");
     const parsed = JSON.parse(data);
-    if (Array.isArray(parsed)) {
-      blockedUsers = new Set(parsed);
-    }
+    if (Array.isArray(parsed)) blockedUsers = new Set(parsed);
     console.log(`🔒 Loaded ${blockedUsers.size} blocked users.`);
   }
 } catch (err) {
@@ -116,7 +126,7 @@ function makeMagicId(chatId, msgId) {
   return `#ID${chatId}_${msgId}`;
 }
 
-function shortText(text, max = 40) {
+function shortText(text, max = 70) {
   if (!text) return "Media";
   return text.length > max ? text.slice(0, max) + "..." : text;
 }
@@ -127,8 +137,141 @@ function getReplyContext(msg) {
     msg.reply_to_message.text ||
     msg.reply_to_message.caption ||
     "🖼️ Media";
+  return `\n↩️ <b>Reply:</b> <i>${escapeHtml(shortText(rText, 40))}</i>`;
+}
 
-  return `\n↩️ <b>Reply:</b> <i>${escapeHtml(shortText(rText, 35))}</i>`;
+function now() {
+  return Date.now();
+}
+
+function normalizeText(text = "") {
+  return text
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function isLowValueGreeting(text = "") {
+  const t = normalizeText(text);
+
+  const uselessPhrases = [
+    "hi",
+    "hello",
+    "helo",
+    "hii",
+    "hlw",
+    "hey",
+    "assalamu alaikum",
+    "as-salamu alaikum",
+    "salam",
+    "slm",
+    "vai",
+    "vhai",
+    "bhai",
+    "oi vai",
+    "oi bhai",
+    "vai achen",
+    "bhai achen",
+    "bhai",
+    "bro",
+    "bro achen",
+    "achen",
+    "koi",
+    "kew achen",
+    "keu achen",
+    "admin achen",
+    "how are you",
+    "kemon achen",
+    "kmn achen",
+    "kmn aso",
+    "kemon aso",
+    "reply den",
+    "reply dao",
+    "seen koren",
+    "ektu dekhen",
+  ];
+
+  return uselessPhrases.includes(t);
+}
+
+function shouldSuppressDuplicate(chatId, text = "") {
+  const t = normalizeText(text);
+  if (!t) return false;
+
+  const item = duplicateTracker.get(chatId);
+  const ts = now();
+
+  if (!item) {
+    duplicateTracker.set(chatId, { text: t, count: 1, time: ts });
+    return false;
+  }
+
+  if (item.text === t && ts - item.time < 15000) {
+    item.count += 1;
+    item.time = ts;
+    duplicateTracker.set(chatId, item);
+    return true;
+  }
+
+  duplicateTracker.set(chatId, { text: t, count: 1, time: ts });
+  return false;
+}
+
+function getTargetGroupId(chatId) {
+  return userCategory.get(chatId) === "withdraw"
+    ? WITHDRAW_GROUP_ID
+    : MAIN_GROUP_ID;
+}
+
+function getCategoryLabel(chatId) {
+  const cat = userCategory.get(chatId);
+  if (cat === "withdraw") return "Withdraw";
+  if (cat === "deposit") return "Deposit";
+  if (cat === "gameid") return "Game ID";
+  if (cat === "others") return "Other Issues";
+  return "Unselected";
+}
+
+function describeMessage(msg) {
+  const text = (msg.text || msg.caption || "").trim();
+
+  if (text && !msg.photo && !msg.video && !msg.voice && !msg.document && !msg.sticker) {
+    return `📝 ${escapeHtml(shortText(text, 120))}`;
+  }
+
+  if (msg.photo) {
+    return text
+      ? `🖼️ Photo — ${escapeHtml(shortText(text, 90))}`
+      : `🖼️ Photo`;
+  }
+
+  if (msg.video) {
+    return text
+      ? `🎥 Video — ${escapeHtml(shortText(text, 90))}`
+      : `🎥 Video`;
+  }
+
+  if (msg.voice) return `🎤 Voice`;
+  if (msg.document) return `📄 Document`;
+  if (msg.sticker) return `🌟 Sticker`;
+  if (msg.animation) return `🎞️ Animation`;
+
+  return `📎 Media / File`;
+}
+
+async function maybeUserAck(chatId) {
+  const last = lastUserReplyNotice.get(chatId) || 0;
+  if (now() - last < 20000) return;
+
+  lastUserReplyNotice.set(chatId, now());
+
+  await api("sendMessage", {
+    chat_id: chatId,
+    text:
+      `✅ <b>GOWIN Support Received Your Message</b>\n\n` +
+      `আমাদের টিম আপনার message পেয়েছে। একটু অপেক্ষা করুন।`,
+    parse_mode: "HTML",
+  });
 }
 
 // ==============================
@@ -197,6 +340,67 @@ const TEXTS = {
 };
 
 // ==============================
+// BATCH SYSTEM
+// ==============================
+function addToBatch(msg) {
+  const chatId = msg.chat.id;
+  const targetGroupId = getTargetGroupId(chatId);
+
+  if (!userBatch.has(chatId)) {
+    userBatch.set(chatId, {
+      items: [],
+      timer: null,
+      targetGroupId,
+      firstMsgId: msg.message_id,
+      firstAt: new Date(),
+      userLink: getUserLink(msg),
+      firstMsg: msg,
+    });
+  }
+
+  const batch = userBatch.get(chatId);
+  batch.targetGroupId = targetGroupId;
+  batch.items.push({
+    type: "summary",
+    text: describeMessage(msg),
+  });
+
+  clearTimeout(batch.timer);
+  batch.timer = setTimeout(() => flushUserBatch(chatId), 8000);
+}
+
+async function flushUserBatch(chatId) {
+  const batch = userBatch.get(chatId);
+  if (!batch || !batch.items.length) return;
+
+  userBatch.delete(chatId);
+
+  const category = getCategoryLabel(chatId);
+  const targetGroupId = batch.targetGroupId;
+  const magicId = makeMagicId(chatId, batch.firstMsgId);
+  const replyContext = getReplyContext(batch.firstMsg);
+
+  const listText = batch.items
+    .map((item, i) => `${i + 1}. ${item.text}`)
+    .join("\n");
+
+  await api("sendMessage", {
+    chat_id: targetGroupId,
+    text:
+      `🔔 <b>GOWIN Support Request</b>\n\n` +
+      `👤 <b>User:</b> ${batch.userLink}${replyContext}\n` +
+      `📂 <b>Category:</b> ${escapeHtml(category)}\n` +
+      `📨 <b>Total Messages:</b> ${batch.items.length}\n\n` +
+      `${listText}\n\n` +
+      `🆔 <code>${magicId}</code>`,
+    parse_mode: "HTML",
+    disable_web_page_preview: true,
+  });
+
+  await maybeUserAck(chatId);
+}
+
+// ==============================
 // SEND ALBUM GROUP
 // ==============================
 async function sendAlbumGroup(groupId) {
@@ -211,6 +415,8 @@ async function sendAlbumGroup(groupId) {
   const userLink = getUserLink(firstMsg);
   const magicId = makeMagicId(chatId, firstMsg.message_id);
   const replyContext = getReplyContext(firstMsg);
+  const targetGroupId = getTargetGroupId(chatId);
+  const category = getCategoryLabel(chatId);
 
   const msgWithCaption = messages.find((m) => m.caption);
   const originalCaption = msgWithCaption ? msgWithCaption.caption : "";
@@ -243,28 +449,23 @@ async function sendAlbumGroup(groupId) {
 
   if (media.length > 0) {
     await api("sendMediaGroup", {
-      chat_id: MAIN_GROUP_ID,
+      chat_id: targetGroupId,
       media,
     });
 
     await api("sendMessage", {
-      chat_id: MAIN_GROUP_ID,
+      chat_id: targetGroupId,
       text:
         `🔔 <b>GOWIN Support Request</b>\n\n` +
         `👤 <b>User:</b> ${userLink}${replyContext}\n` +
-        `🆔 <code>${magicId}</code>\n` +
-        `📎 <b>Sent:</b> Album / Multiple Media`,
+        `📂 <b>Category:</b> ${escapeHtml(category)}\n` +
+        `🖼️ <b>Sent:</b> Album / Multiple Media (${media.length})\n` +
+        `🆔 <code>${magicId}</code>`,
       parse_mode: "HTML",
     });
   }
 
-  await api("sendMessage", {
-    chat_id: chatId,
-    text:
-      `✅ <b>GOWIN Support Received Your Message</b>\n\n` +
-      `আমাদের টিম আপনার album/media পেয়েছে। একটু অপেক্ষা করুন।`,
-    parse_mode: "HTML",
-  });
+  await maybeUserAck(chatId);
 }
 
 // ==============================
@@ -327,11 +528,15 @@ async function poll() {
             continue;
           }
 
-          if (chatId === MAIN_GROUP_ID && msg.reply_to_message) {
+          // admin reply / block / unblock from both support groups
+          if (
+            (chatId === MAIN_GROUP_ID || chatId === WITHDRAW_GROUP_ID) &&
+            msg.reply_to_message
+          ) {
             const repliedText =
               msg.reply_to_message.text || msg.reply_to_message.caption || "";
 
-            const match = repliedText.match(/#ID(\d+)_(\d+)/);
+            const match = repliedText.match(/#ID(-?\d+)_(\d+)/);
 
             if (match) {
               const targetUserId = Number(match[1]);
@@ -406,6 +611,8 @@ async function poll() {
           const firstName = msg.from?.first_name || "User";
 
           if (text === "/start") {
+            userCategory.delete(chatId);
+
             await api("sendMessage", {
               chat_id: chatId,
               text: TEXTS.welcome(firstName),
@@ -415,7 +622,27 @@ async function poll() {
             continue;
           }
 
+          // useless greeting ignore
+          if (text && isLowValueGreeting(text)) {
+            await api("sendMessage", {
+              chat_id: chatId,
+              text:
+                `📩 <b>GOWIN Support</b>\n\n` +
+                `দয়া করে শুধু hello/vai টাইপ message না পাঠিয়ে আপনার সমস্যাটি বিস্তারিত লিখুন।`,
+              parse_mode: "HTML",
+              reply_markup: mainKeyboard,
+            });
+            continue;
+          }
+
+          // duplicate spam ignore
+          if (text && shouldSuppressDuplicate(chatId, text)) {
+            continue;
+          }
+
           if (text === CMD_DEPOSIT) {
+            userCategory.set(chatId, "deposit");
+
             await api("sendMessage", {
               chat_id: chatId,
               text: TEXTS.deposit,
@@ -425,15 +652,21 @@ async function poll() {
           }
 
           if (text === CMD_WITHDRAW) {
+            userCategory.set(chatId, "withdraw");
+
             await api("sendMessage", {
               chat_id: chatId,
-              text: TEXTS.withdraw,
+              text:
+                TEXTS.withdraw +
+                `\n\n📌 <b>Note:</b> আপনার withdraw message আলাদা team-এ পাঠানো হবে।`,
               parse_mode: "HTML",
             });
             continue;
           }
 
           if (text === CMD_GAMEID) {
+            userCategory.set(chatId, "gameid");
+
             await api("sendMessage", {
               chat_id: chatId,
               text: TEXTS.gameid,
@@ -443,6 +676,8 @@ async function poll() {
           }
 
           if (text === CMD_OTHERS) {
+            userCategory.set(chatId, "others");
+
             await api("sendMessage", {
               chat_id: chatId,
               text: TEXTS.others,
@@ -467,48 +702,8 @@ async function poll() {
             continue;
           }
 
-          // Single message forward/copy to admin group
-          const userLink = getUserLink(msg);
-          const magicId = makeMagicId(chatId, msg.message_id);
-          const replyContext = getReplyContext(msg);
-
-          if (text && !msg.photo && !msg.video && !msg.voice && !msg.document) {
-            await api("sendMessage", {
-              chat_id: MAIN_GROUP_ID,
-              text:
-                `🔔 <b>GOWIN Support Request</b>\n\n` +
-                `👤 <b>User:</b> ${userLink}${replyContext}\n\n` +
-                `📝 <b>Message:</b>\n${escapeHtml(text)}\n\n` +
-                `🆔 <code>${magicId}</code>`,
-              parse_mode: "HTML",
-              disable_web_page_preview: true,
-            });
-          } else {
-            await api("copyMessage", {
-              chat_id: MAIN_GROUP_ID,
-              from_chat_id: chatId,
-              message_id: msg.message_id,
-            });
-
-            await api("sendMessage", {
-              chat_id: MAIN_GROUP_ID,
-              text:
-                `🔔 <b>GOWIN Support Request</b>\n\n` +
-                `👤 <b>User:</b> ${userLink}${replyContext}\n` +
-                `📎 <b>Sent:</b> Media / File\n` +
-                `🆔 <code>${magicId}</code>`,
-              parse_mode: "HTML",
-            });
-          }
-
-          await api("sendMessage", {
-            chat_id: chatId,
-            text:
-              `✅ <b>GOWIN Support Received Your Message</b>\n\n` +
-              `আমাদের টিম আপনার message পেয়েছে। একটু অপেক্ষা করুন।`,
-            parse_mode: "HTML",
-          });
-
+          // Batch normal messages instead of sending too many
+          addToBatch(msg);
           continue;
         }
       }
