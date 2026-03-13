@@ -4,21 +4,42 @@ const MAIN_GROUP_ID = -1003888768369;
 
 const http = require("http");
 const fs = require("fs");
+const path = require("path");
+
+// ==============================
+// RENDER / HEALTH SERVER
+// ==============================
+const PORT = process.env.PORT || 10000;
 
 const server = http.createServer((req, res) => {
-  res.writeHead(200, { "Content-Type": "text/plain" });
-  res.end("GOWIN Support Bot is Running...");
-});
-server.listen(process.env.PORT || 8080);
+  if (req.url === "/health") {
+    res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
+    res.end(
+      JSON.stringify({
+        status: "ok",
+        service: "MARUF BOSS SUPPORT BOT",
+        uptime: process.uptime(),
+        time: new Date().toISOString(),
+      })
+    );
+    return;
+  }
 
-console.log("🚀 GOWIN Support Bot Started...");
+  res.writeHead(200, { "Content-Type": "text/plain; charset=utf-8" });
+  res.end("MARUF BOSS SUPPORT BOT RUNNING");
+});
+
+server.listen(PORT, "0.0.0.0", () => {
+  console.log(`🌐 Web server running on port ${PORT}`);
+  console.log(`🚀 MARUF BOSS Support Bot Started...`);
+});
 
 // ==============================
 // FILES / MEMORY
 // ==============================
-const BLOCK_FILE = "blocked.json";
+const BLOCK_FILE = path.join(__dirname, "blocked.json");
 let blockedUsers = new Set();
-const albumBucket = {};
+const albumBucket = Object.create(null);
 
 // ==============================
 // LOAD BLOCK LIST
@@ -26,18 +47,21 @@ const albumBucket = {};
 try {
   if (fs.existsSync(BLOCK_FILE)) {
     const data = fs.readFileSync(BLOCK_FILE, "utf8");
-    blockedUsers = new Set(JSON.parse(data));
+    const parsed = JSON.parse(data);
+    if (Array.isArray(parsed)) {
+      blockedUsers = new Set(parsed);
+    }
     console.log(`🔒 Loaded ${blockedUsers.size} blocked users.`);
   }
 } catch (err) {
-  console.error("⚠️ Error loading blocked list:", err);
+  console.error("⚠️ Error loading blocked list:", err.message);
 }
 
 function saveBlockList() {
   try {
-    fs.writeFileSync(BLOCK_FILE, JSON.stringify([...blockedUsers], null, 2));
+    fs.writeFileSync(BLOCK_FILE, JSON.stringify([...blockedUsers], null, 2), "utf8");
   } catch (err) {
-    console.error("⚠️ Error saving blocked list:", err);
+    console.error("⚠️ Error saving blocked list:", err.message);
   }
 }
 
@@ -51,7 +75,14 @@ async function api(method, data = {}) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(data),
     });
-    return await res.json();
+
+    const json = await res.json().catch(() => null);
+
+    if (!res.ok || !json || json.ok === false) {
+      console.error(`⚠️ Telegram API Error [${method}]`, json || res.statusText);
+    }
+
+    return json;
   } catch (e) {
     console.error(`⚠️ API Error (${method}):`, e.message);
     return null;
@@ -76,9 +107,9 @@ function getUserName(msg) {
 }
 
 function getUserLink(msg) {
-  const chatId = msg.chat.id;
+  const userId = msg.from?.id || msg.chat?.id;
   const fullName = escapeHtml(getUserName(msg));
-  return `<a href="tg://user?id=${chatId}">${fullName}</a>`;
+  return `<a href="tg://user?id=${userId}">${fullName}</a>`;
 }
 
 function makeMagicId(chatId, msgId) {
@@ -96,6 +127,7 @@ function getReplyContext(msg) {
     msg.reply_to_message.text ||
     msg.reply_to_message.caption ||
     "🖼️ Media";
+
   return `\n↩️ <b>Reply:</b> <i>${escapeHtml(shortText(rText, 35))}</i>`;
 }
 
@@ -167,7 +199,7 @@ const TEXTS = {
 // ==============================
 // SEND ALBUM GROUP
 // ==============================
-async function sendAlbumGroup(groupId, originalMsg) {
+async function sendAlbumGroup(groupId) {
   const bucket = albumBucket[groupId];
   if (!bucket || !bucket.messages?.length) return;
 
@@ -225,6 +257,14 @@ async function sendAlbumGroup(groupId, originalMsg) {
       parse_mode: "HTML",
     });
   }
+
+  await api("sendMessage", {
+    chat_id: chatId,
+    text:
+      `✅ <b>GOWIN Support Received Your Message</b>\n\n` +
+      `আমাদের টিম আপনার album/media পেয়েছে। একটু অপেক্ষা করুন।`,
+    parse_mode: "HTML",
+  });
 }
 
 // ==============================
@@ -239,18 +279,25 @@ async function poll() {
       const data = await res.json();
 
       if (!data.ok) {
+        console.error("⚠️ getUpdates failed:", data);
         await sleep(4000);
         continue;
       }
 
       for (const update of data.result) {
         offset = update.update_id + 1;
-        const msg = update.message;
+
+        const msg =
+          update.message ||
+          update.edited_message ||
+          update.channel_post ||
+          update.edited_channel_post;
+
         if (!msg) continue;
         if (msg.from?.is_bot) continue;
 
         const chatId = msg.chat.id;
-        const text = msg.text || msg.caption || "";
+        const text = (msg.text || msg.caption || "").trim();
         const isPrivate = msg.chat.type === "private";
         const isGroup =
           msg.chat.type === "group" || msg.chat.type === "supergroup";
@@ -280,14 +327,15 @@ async function poll() {
             continue;
           }
 
-          // Admin block/unblock only in main group and replying to forwarded support tag
           if (chatId === MAIN_GROUP_ID && msg.reply_to_message) {
             const repliedText =
               msg.reply_to_message.text || msg.reply_to_message.caption || "";
-            const match = repliedText.match(/#ID(\d+)_/);
+
+            const match = repliedText.match(/#ID(\d+)_(\d+)/);
 
             if (match) {
               const targetUserId = Number(match[1]);
+              const targetUserMsgId = Number(match[2]);
 
               if (text === "/block") {
                 blockedUsers.add(targetUserId);
@@ -328,35 +376,12 @@ async function poll() {
                 });
                 continue;
               }
-            }
-          }
-
-          // Natural admin reply to user
-          if (chatId === MAIN_GROUP_ID && msg.reply_to_message) {
-            const repliedText =
-              msg.reply_to_message.text || msg.reply_to_message.caption || "";
-            const match = repliedText.match(/#ID(\d+)_(\d+)/);
-
-            if (match) {
-              const userId = Number(match[1]);
-              const userMsgId = Number(match[2]);
-
-              if (blockedUsers.has(userId)) {
-                await api("sendMessage", {
-                  chat_id: chatId,
-                  text:
-                    `⚠️ <b>This user is currently blocked.</b>\n` +
-                    `Unblock first to reply.`,
-                  parse_mode: "HTML",
-                });
-                continue;
-              }
 
               const sent = await api("copyMessage", {
-                chat_id: userId,
+                chat_id: targetUserId,
                 from_chat_id: chatId,
                 message_id: msg.message_id,
-                reply_to_message_id: userMsgId,
+                reply_to_message_id: targetUserMsgId,
               });
 
               if (sent && sent.ok) {
@@ -366,6 +391,8 @@ async function poll() {
                   reaction: [{ type: "emoji", emoji: "⚡" }],
                 });
               }
+
+              continue;
             }
           }
 
@@ -432,7 +459,7 @@ async function poll() {
               albumBucket[groupId] = {
                 firstMsg: msg,
                 messages: [],
-                timer: setTimeout(() => sendAlbumGroup(groupId, msg), 2500),
+                timer: setTimeout(() => sendAlbumGroup(groupId), 2500),
               };
             }
 
@@ -474,7 +501,6 @@ async function poll() {
             });
           }
 
-          // Optional confirmation to user
           await api("sendMessage", {
             chat_id: chatId,
             text:
@@ -494,4 +520,3 @@ async function poll() {
 }
 
 poll();
-
